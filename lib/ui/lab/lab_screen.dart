@@ -57,7 +57,7 @@ class _LabScreenState extends State<LabScreen> {
     if (path == null || !mounted) return;
     setState(() {
       _sourcePath = path;
-      _sourceLabel = 'in-app capture (camera plugin, ResolutionPreset.high)';
+      _sourceLabel = 'in-app capture (camera plugin, ResolutionPreset.veryHigh ~1080p)';
       _report = null;
       _error = null;
     });

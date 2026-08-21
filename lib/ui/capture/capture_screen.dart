@@ -19,6 +19,7 @@ import 'package:record/record.dart';
 
 import '../../app.dart';
 import '../../data/database.dart';
+import '../../domain/camera_choice.dart';
 import '../../domain/encoding_profile.dart';
 import '../theme/cairn_theme.dart';
 import '../theme/tokens.dart';
@@ -47,7 +48,20 @@ class _CaptureScreenState extends State<CaptureScreen>
   Medium _medium = Medium.video;
 
   CameraController? _camera;
-  final _recorder = AudioRecorder();
+
+  /// Cached so the flip button can be shown or hidden without re-enumerating,
+  /// and so the flip itself does not have to await `availableCameras()` again.
+  List<CameraDescription> _cameras = const [];
+  CameraLensDirection? _lens;
+
+  /// Created on first audio use, not up front.
+  ///
+  /// The constructor starts a platform call, so building one for a video
+  /// capture that never records audio is both wasteful and a failure point on
+  /// platforms where the plugin is absent.
+  AudioRecorder? _recorder;
+
+  AudioRecorder get _audio => _recorder ??= AudioRecorder();
 
   bool _recording = false;
   bool _initialising = true;
@@ -87,8 +101,12 @@ class _CaptureScreenState extends State<CaptureScreen>
     // Light *glyphs*, because this screen's chrome is dark in either theme.
     SystemChrome.setSystemUIOverlayStyle(SystemUiOverlayStyle.light);
     if (_type.allowedMedium == AllowedMedium.audioOnly) _medium = Medium.audio;
-    _prepare();
+    // NB: _prepare() is deliberately *not* called here. It reads the remembered
+    // lens from AppScope, and touching an inherited widget before initState
+    // returns throws.
   }
+
+  bool _prepared = false;
 
   @override
   void didChangeDependencies() {
@@ -97,6 +115,13 @@ class _CaptureScreenState extends State<CaptureScreen>
     _restoreOverlayStyle = context.palette.isDark
         ? SystemUiOverlayStyle.light
         : SystemUiOverlayStyle.dark;
+
+    // First legal moment to read inherited widgets, so this is where capture
+    // actually starts up.
+    if (!_prepared) {
+      _prepared = true;
+      _prepare();
+    }
   }
 
   @override
@@ -108,7 +133,7 @@ class _CaptureScreenState extends State<CaptureScreen>
     _ticker?.cancel();
     _amplitudeSub?.cancel();
     _camera?.dispose();
-    _recorder.dispose();
+    _recorder?.dispose();
     super.dispose();
   }
 
@@ -135,9 +160,12 @@ class _CaptureScreenState extends State<CaptureScreen>
   }
 
   Future<void> _prepareCamera() async {
+    // Read the remembered lens before awaiting: reaching for an inherited
+    // widget after an async gap is exactly how a disposed context gets used.
+    final remembered = AppScope.of(context).settings.preferredLens.value;
     try {
-      final cameras = await availableCameras();
-      if (cameras.isEmpty) {
+      _cameras = await availableCameras();
+      if (_cameras.isEmpty) {
         if (mounted) {
           setState(() {
             _error = 'No camera on this device.';
@@ -146,12 +174,30 @@ class _CaptureScreenState extends State<CaptureScreen>
         }
         return;
       }
+
+      // Opens with the remembered lens: a diary user should not have to flip to
+      // the front camera on every capture.
+      final wanted = _lens ?? remembered;
+      final description = pickCamera(_cameras, preferred: wanted);
+      if (description == null) {
+        if (mounted) {
+          setState(() {
+            _error = 'No usable camera on this device.';
+            _initialising = false;
+          });
+        }
+        return;
+      }
+      _lens = description.lensDirection;
+
       final controller = CameraController(
-        cameras.first,
-        // Capture near the phone's normal quality; the profile does the
-        // shrinking afterwards (§8). Capturing low would throw away detail the
-        // compressor could otherwise have spent its bitrate on.
-        ResolutionPreset.high,
+        description,
+        // 1080p. Note that ResolutionPreset.high is ~720p, not 1080p — with
+        // that, the Balanced and High profiles' 1080p caps never engaged and
+        // the pipeline was compressing 720p into 720p. §8 says to capture near
+        // the phone's normal quality and let the profile do the shrinking, so
+        // the source has to be at least as large as the largest rung.
+        ResolutionPreset.veryHigh,
         enableAudio: true,
       );
       await controller.initialize();
@@ -172,6 +218,50 @@ class _CaptureScreenState extends State<CaptureScreen>
             : 'Camera unavailable (${e.code}).';
         _initialising = false;
       });
+    } catch (e) {
+      // Anything else the platform throws -- a missing plugin, a vendor
+      // surprise. An unreachable camera must land the user on the retry state,
+      // never on a spinner that never resolves.
+      if (!mounted) return;
+      setState(() {
+        _error = 'The camera could not be opened on this device.';
+        _initialising = false;
+      });
+    }
+  }
+
+  /// Flips to the next lens the device actually has.
+  ///
+  /// Uses `setDescription` rather than rebuilding the controller: it disposes
+  /// and re-initialises internally, and it is the only path that also works
+  /// while a recording is in progress.
+  Future<void> _flipCamera() async {
+    final controller = _camera;
+    final current = _lens;
+    if (controller == null || current == null) return;
+
+    final next = nextLens(_cameras, current: current);
+    if (next == null) return;
+    final description = pickCamera(_cameras, preferred: next);
+    if (description == null) return;
+
+    setState(() => _lens = description.lensDirection);
+    try {
+      await controller.setDescription(description);
+      // Remembered only on success, so a lens that fails to open does not
+      // become the setting the app keeps retrying.
+      if (mounted) {
+        await AppScope.of(context).settings.setPreferredLens(
+              description.lensDirection,
+            );
+      }
+    } on CameraException catch (e) {
+      if (mounted) {
+        setState(() {
+          _lens = current;
+          _error = 'Could not switch camera (${e.code}).';
+        });
+      }
     }
   }
 
@@ -204,7 +294,7 @@ class _CaptureScreenState extends State<CaptureScreen>
       } else {
         // §10.4: the OS prompt appears here, at first record, rather than on an
         // up-front permissions screen.
-        if (!await _recorder.hasPermission()) {
+        if (!await _audio.hasPermission()) {
           if (mounted) {
             setState(() => _error =
                 'Cairn needs the microphone to record audio entries.');
@@ -217,8 +307,8 @@ class _CaptureScreenState extends State<CaptureScreen>
         // Audio bitrate is set HERE, not in post: flutter_compress exposes
         // audioBitrateKbps on iOS only, so capture time is the only place §8's
         // audio ladder can be applied on both platforms.
-        await _recorder.start(profile.audioConfig, path: path);
-        _amplitudeSub = _recorder
+        await _audio.start(profile.audioConfig, path: path);
+        _amplitudeSub = _audio
             .onAmplitudeChanged(const Duration(milliseconds: 90))
             .listen((amp) {
           if (!mounted) return;
@@ -265,7 +355,7 @@ class _CaptureScreenState extends State<CaptureScreen>
         final file = await _camera?.stopVideoRecording();
         path = file?.path;
       } else {
-        path = await _recorder.stop() ?? _pendingPath;
+        path = await _audio.stop() ?? _pendingPath;
       }
     } catch (e) {
       if (mounted) setState(() => _error = 'Could not finish recording: $e');
@@ -427,8 +517,20 @@ class _CaptureScreenState extends State<CaptureScreen>
             },
           ),
           const Spacer(),
-          // Balances the close button so the pill is genuinely centred.
-          const SizedBox(width: 48),
+          // Occupies the close button's mirror position, so the type pill stays
+          // centred whether or not the device can flip.
+          SizedBox(
+            width: 48,
+            child: _medium == Medium.video && canFlipCamera(_cameras)
+                ? IconButton(
+                    icon: const Icon(Icons.cameraswitch_outlined,
+                        color: _chromeText),
+                    tooltip: 'Switch to '
+                        '${(nextLens(_cameras, current: _lens ?? CameraLensDirection.back) ?? CameraLensDirection.front).label}',
+                    onPressed: _flipCamera,
+                  )
+                : null,
+          ),
         ],
       ),
     );

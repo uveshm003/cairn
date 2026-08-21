@@ -141,6 +141,18 @@ its at capture time from `record`. This is forced, not stylistic:
 Android's Media3 exposes neither and ignores them silently. So §8's audio ladder
 (32–48 / 96 / 128 kbps) cannot be applied after the fact on Android at all.
 
+### Both lenses are first-class
+
+§3 lists "keep a private video diary" next to "record my guitar practice", so the
+front camera is not an afterthought. Capture opens with the remembered lens and
+the flip is one tap; the choice persists, so a diary user never re-flips. The
+default is back, because more of §3's jobs point away from you than at you.
+
+Selection lives in `lib/domain/camera_choice.dart` as pure functions, because the
+interesting cases are the odd devices: a tablet with only a front camera, a
+desktop with only a USB webcam, a phone with three back lenses. Verified on
+device — the flip closes `CameraId-0` and opens `CameraId-1`.
+
 ### Kept originals go somewhere durable
 
 `keepOriginals` (§8's opt-in, off by default) moves the uncompressed source into
@@ -151,11 +163,10 @@ them would delete exactly the files the setting exists to preserve.
 
 ### Corrections to requirements.md
 
-1. **§2's "a 30s clip can be 300–500 MB" is arithmetically impossible.** It
-   implies 80–133 Mbps. §8's own figures disagree: 4K @ 50 Mbps is ~190 MB for
-   30s, 1080p30 @ 17–20 Mbps is ~65–75 MB. Only ProRes exceeds 500 MB. Do not
-   put that number in store copy. §8's *profile table* is sound — the error is
-   confined to §2's baseline.
+1. **§2's "a 30s clip can be 300–500 MB" is wrong — now measured, not argued.**
+   In-app 1080p capture on a Pixel 7 Pro runs at **16.7 Mbps**, which is
+   **60 MB per 30 seconds** — off by 5–8×. Do not put that figure in store copy.
+   §8's *profile table*, by contrast, is confirmed: see the measurements above.
 2. **§8's fps and audio-bitrate columns are not enforceable on Android** (see
    above). The fps column is advisory there.
 3. **The offline promise leaks through transitive AARs.** Media3 (via
@@ -166,6 +177,49 @@ them would delete exactly the files the setting exists to preserve.
    them with `tools:node="remove"`. The release merged manifest now ships only
    `CAMERA`, `RECORD_AUDIO` and `READ_EXTERNAL_STORAGE`.
    (`INTERNET` was only ever in Flutter's debug/profile manifests.)
+
+## Measured on real hardware
+
+Pixel 7 Pro, Android 17 (API 37), in-app capture at `ResolutionPreset.veryHigh`
+(~1080p). Reproduce with `flutter test integration_test/real_capture_test.dart -d
+<device>`; the test prints these figures rather than only asserting on them.
+
+| | Measured | Spec says |
+|---|---|---|
+| Raw capture bitrate | 16.7 Mbps → **60 MB / 30s** | §2: 300–500 MB — **wrong** |
+| Balanced output | 3,773 kbps vs 3,596 requested (**105% of target**) | §8: ~3–4 Mbps ✓ |
+| 10-minute Balanced entry | **270 MB** | §8: 250–300 MB ✓ |
+| Compression ratio | 29.5 MB → 6.7 MB (**77% saved**) | — |
+| Codec | **HEVC every time**, no H.264 fallback | §8 assumes HEVC ✓ |
+| Encode speed | **0.16× realtime** (10-min clip ≈ 1.6 min) | §17's open question |
+| Ladder monotonic | Small 1.00 MB < High 2.13 MB, same clip | §8's three rungs ✓ |
+| Audio (Small) | 50 kbps measured vs 40 requested | §8: 32–48 kbps, close |
+
+**The §8 ladder is validated; §2's baseline is not.** Two caveats worth keeping:
+a 3-second clip overshoots its target bitrate by 25–60% because the first
+keyframe dominates, so only the 15-second measurement means anything; and
+`ResolutionPreset.high` is **~720p, not 1080p** — with it, the Balanced and High
+profiles' 1080p caps never engaged and the pipeline was compressing 720p into
+720p. Capture is `veryHigh`.
+
+### The bug only a real recording could find
+
+Video saves crashed the app outright, every time. The manifest strips
+`FOREGROUND_SERVICE` (for the offline promise) while `EncodingProfile` set
+`keepAliveInBackground: true`. `flutter_compress`'s own guide says a stripped
+permission "does not crash the encode" — on Android 14+ that is false:
+
+```
+SecurityException: Permission Denial: startForeground ... requires
+  android.permission.FOREGROUND_SERVICE
+    at CompressionForegroundService.onStartCommand
+→ Application Error, then ANR
+```
+
+Encoding is now foreground-only, and `test/manifest_consistency_test.dart` pins
+the flag and the manifest together so the pair cannot drift apart again. The
+cost: backgrounding mid-encode can kill it, which fails the save rather than
+losing anything — §9's ordering keeps the original until the output is verified.
 
 ## Platform notes
 
@@ -194,23 +248,24 @@ them would delete exactly the files the setting exists to preserve.
 
 Being explicit, because a green test suite is not the same as a working feature:
 
-- **Recording has not run on hardware.** The camera and microphone paths, video
-  compression, thumbnail generation, and the `skipped` branch of
-  `SavePipeline.saveVideo` have never executed. They are written defensively and
-  commented, but they are unexercised.
-- **The compression ladder is unvalidated.** Bytes-out is arithmetic and needs
-  no device, but whether HEVC hardware encode exists on a given OEM, how long it
-  takes, and whether 1.75 Mbps *looks* acceptable all need a real recording.
-  Settings → Maintenance → Compression Lab measures exactly this and copies out
-  a markdown report.
+- **Perceptual quality is still a judgement call.** The ladder hits its target
+  bitrates, but whether 1.75 Mbps *looks* acceptable for a talking-head note is
+  something only eyes on real footage settle. Settings → Maintenance →
+  Compression Lab runs all three rungs over one clip and copies out a report.
+- **Only one device.** Every figure above is a Pixel 7 Pro. HEVC encode quality
+  and speed vary across OEMs (§17), so a budget Android device is the next thing
+  worth measuring — the H.264 fallback path has never been taken, because this
+  device never needed it.
 - **HEVC decode on older devices** (§17). A device that encodes HEVC but cannot
   decode it fails in the player; the message there says so rather than showing a
   black rectangle.
 - **Export's share sheet** has not been driven end to end, though the archive
   itself is round-trip tested (14 tests).
-- **The capture screen's design** has been built but not seen with a live camera
-  preview behind it — the scrims, the type pill, and the record button are
-  verified only against the audio stage and widget tests.
+- **The review and save screen** has not been driven through by hand — the
+  pipeline behind it is tested, the form on top of it is not.
+- **Front-camera preview mirroring** follows whatever the platform does; it has
+  not been checked against text held up to the lens. (Deliberately not
+  screenshotted here — that would photograph the room.)
 - **Location capture** is wired (opt-in, off by default, coarse accuracy, 6s
   timeout, saves without coordinates on any failure) but has not been exercised
   on hardware.

@@ -18,11 +18,18 @@
         tools:node="remove" />
 
     <!-- flutter_compress starts a foreground service only when
-         keepAliveInBackground is true. Every profile in lib/domain/encoding_profile.dart
-         sets it false, so these three are dead weight. If background encoding
-         is ever wanted, delete these three lines first — a stripped permission
-         does not crash the encode, it silently loses background protection,
-         which is the kind of bug that only shows up on a user's phone. -->
+         keepAliveInBackground is true. lib/domain/encoding_profile.dart sets it
+         false, so these three are dead weight.
+
+         These two settings MUST agree. The plugin's guide claims a stripped
+         permission "does not crash the encode"; on Android 14+ that is wrong —
+         its service calls startForeground() unconditionally and the resulting
+         SecurityException kills the app on every video save. Measured on a
+         Pixel 7 Pro (API 37). test/manifest_consistency_test.dart pins the two
+         together so the pair cannot drift again.
+
+         To enable background encoding: delete these three removals AND flip
+         keepAliveInBackground to true. Never one without the other. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"
         tools:node="remove" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"

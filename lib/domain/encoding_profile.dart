@@ -118,9 +118,22 @@ class EncodingProfile {
         // If compressing would make the file bigger, keep the original. The
         // result comes back `skipped`, and `outputPath` is then the *input*.
         keepOriginalIfLarger: true,
-        // Encoding continues if the user backgrounds the app mid-save, which
-        // matters for a 20-minute practice clip.
-        keepAliveInBackground: true,
+        // Foreground-only.
+        //
+        // `true` starts a foreground service, which needs FOREGROUND_SERVICE,
+        // FOREGROUND_SERVICE_DATA_SYNC and POST_NOTIFICATIONS. Those are
+        // stripped from the manifest to keep the permission list honest for a
+        // privacy-first app (see AndroidManifest.xml) — and contrary to the
+        // plugin's guide, a stripped permission does not degrade gracefully on
+        // Android 14+: the plugin's service throws SecurityException inside
+        // onStartCommand and takes the whole app down on every video save.
+        //
+        // The cost of `false` is that backgrounding the app mid-encode can kill
+        // it. That fails the save rather than losing anything: §9's ordering
+        // keeps the original until the output is verified, so the user can
+        // simply save again. Restoring the three permissions is the trade if
+        // background encoding is ever wanted.
+        keepAliveInBackground: false,
       );
 
   /// Capture-time config for audio entries.

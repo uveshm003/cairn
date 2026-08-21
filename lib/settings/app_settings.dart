@@ -5,9 +5,11 @@
 /// wait on a disk write.
 library;
 
+import 'package:camera/camera.dart' show CameraLensDirection;
 import 'package:flutter/material.dart';
 
 import '../data/database.dart';
+import '../domain/camera_choice.dart';
 import '../domain/entry_filter.dart';
 import 'dart:convert';
 
@@ -28,6 +30,7 @@ class AppSettings {
   static const _kLastBackupAt = 'lastBackupAt';
   static const _kGridView = 'gridView';
   static const _kProfileOverride = 'profileOverride';
+  static const _kPreferredLens = 'preferredLens';
 
   /// S6: a hard ceiling across all types, to protect storage and encode time.
   static const defaultHardCapMs = 30 * 60 * 1000;
@@ -54,6 +57,12 @@ class AppSettings {
   /// Advanced override of the type's profile (S8 allows this for power users).
   /// Null means "let the type decide", which is the intended path.
   final profileOverride = ValueNotifier<ProfileKind?>(null);
+
+  /// Which camera to open with. Remembered, because a user who records diary
+  /// entries wants the front lens every time and should not re-flip on each
+  /// capture. Defaults to back: of the jobs in §3, more of them point away from
+  /// you (practice, how-to, milestones) than at you.
+  final preferredLens = ValueNotifier(CameraLensDirection.back);
 
   final entriesSinceBackup = ValueNotifier(0);
   final lastBackupAt = ValueNotifier<DateTime?>(null);
@@ -102,6 +111,10 @@ class AppSettings {
       'high' => ProfileKind.high,
       _ => null,
     };
+
+    preferredLens.value =
+        LensLabel.fromStorage(await get(_kPreferredLens)) ??
+            CameraLensDirection.back;
 
     final storedFilter = await get(_kLastFilter);
     if (storedFilter != null) {
@@ -160,6 +173,11 @@ class AppSettings {
   Future<void> setProfileOverride(ProfileKind? kind) async {
     profileOverride.value = kind;
     await _db.setSetting(_kProfileOverride, kind?.name ?? '');
+  }
+
+  Future<void> setPreferredLens(CameraLensDirection lens) async {
+    preferredLens.value = lens;
+    await _db.setSetting(_kPreferredLens, lens.storageKey);
   }
 
   Future<void> saveFilter(EntryFilter filter) async {

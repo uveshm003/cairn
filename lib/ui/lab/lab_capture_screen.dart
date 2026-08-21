@@ -62,7 +62,7 @@ class _LabCaptureScreenState extends State<LabCaptureScreen>
         cameras.first,
         // Capture at a realistic "phone default" so the compression delta the
         // spike measures resembles what real users will see.
-        ResolutionPreset.high,
+        ResolutionPreset.veryHigh,
         enableAudio: true,
       );
       await controller.initialize();
