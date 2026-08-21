@@ -8,19 +8,21 @@ device lean (real compression), and never hand any of it to a cloud.
 
 ## Status
 
-The v1 MVP from `requirements.md` §4 is built and running. Verified on a Pixel 7
-Pro (Android 17): boots, database and FTS5 work on-device, library renders,
-onboarding persists.
+The v1 MVP from `requirements.md` §4 is built and running, and the capture
+pipeline is validated against real recordings on a Pixel 7 Pro (Android 17).
 
 | | |
 |---|---|
 | `flutter analyze` | clean |
-| `flutter test` | 113 passing |
-| `flutter test integration_test/ -d <device>` | 6 passing, on a Pixel 7 Pro |
-| `flutter build apk --release` | builds (65.2 MB) |
-| `flutter build ios --release --no-codesign` | builds (23.0 MB) |
+| `flutter test` | 143 passing |
+| `integration_test/capture_flow_test.dart` | 6 passing, on device |
+| `integration_test/real_capture_test.dart` | 8 tests — **real recordings** (see note) |
+| `flutter build apk --release` | builds (66.0 MB) |
+| `flutter build ios --release --no-codesign` | builds (24.3 MB) |
 
-**Not yet exercised on hardware: recording itself.** See *What is unverified*.
+Recording, compression, and both camera lenses are exercised on hardware. See
+*Measured on real hardware* for the numbers, and *What is unverified* for what
+is still open.
 
 ## Running it
 
@@ -261,8 +263,14 @@ Being explicit, because a green test suite is not the same as a working feature:
   black rectangle.
 - **Export's share sheet** has not been driven end to end, though the archive
   itself is round-trip tested (14 tests).
-- **The review and save screen** has not been driven through by hand — the
-  pipeline behind it is tested, the form on top of it is not.
+- **One test in `real_capture_test.dart` is unverified after its last edit.**
+  All eight passed individually and seven passed together; the widget-level
+  audio test then needed a teardown-ordering fix (unmount before closing the
+  database, or a mounted StreamBuilder deadlocks the runner) and the device
+  disconnected before it could be re-run. Re-run the file to confirm.
+- **The review and save screen** has not been filled in and saved by hand. The
+  pipeline behind it is tested, and the audio test reaches it and reads its size
+  estimate back, but nobody has typed a title and tapped Save.
 - **Front-camera preview mirroring** follows whatever the platform does; it has
   not been checked against text held up to the lens. (Deliberately not
   screenshotted here — that would photograph the room.)

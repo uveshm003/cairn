@@ -21,9 +21,14 @@ import 'package:cairn/domain/camera_choice.dart';
 import 'package:cairn/domain/encoding_profile.dart';
 import 'package:cairn/media/media_store.dart';
 import 'package:cairn/media/save_pipeline.dart';
+import 'package:cairn/app.dart';
+import 'package:cairn/settings/app_settings.dart';
+import 'package:cairn/ui/capture/capture_screen.dart';
+import 'package:cairn/ui/theme/cairn_theme.dart';
+import 'package:cairn/ui/theme/tokens.dart';
+import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
 import 'package:drift/drift.dart' show Value;
-import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:record/record.dart';
@@ -320,6 +325,79 @@ void main() {
     // The whole point of the pipeline.
     expect(saved.fileSizeBytes, lessThan(rawBytes));
   }));
+
+  testWidgets('audio records through the capture widget, not just the plugin',
+      (tester) async {
+    // Everything else here drives the plugins directly, which left the widget's
+    // own audio path — the lazily-created AudioRecorder, the amplitude stream,
+    // the timer, and the hand-off to review — never executed.
+    final db = CairnDatabase();
+    final settings = await AppSettings.load(db);
+    addTearDown(db.close);
+    // Registered second so it runs FIRST (teardowns are LIFO): the review
+    // screen this test lands on holds a live audio player and a database
+    // stream, and closing the database under a mounted tree deadlocks.
+    addTearDown(() => tester.pumpWidget(const SizedBox.shrink()));
+    final types = await db.allTypes();
+
+    await tester.pumpWidget(AppScope(
+      db: db,
+      store: store,
+      pipeline: pipeline,
+      settings: settings,
+      child: MaterialApp(
+        theme: buildCairnTheme(CairnPalette.dark),
+        home: CaptureScreen(
+          initialType: types.firstWhere((t) => t.name == 'Quick Note'),
+        ),
+      ),
+    ));
+    await tester.pumpAndSettle(const Duration(seconds: 2));
+
+    // Switch to audio, which is where the lazy recorder gets built.
+    await tester.tap(find.text('Audio'));
+    await tester.pumpAndSettle(const Duration(seconds: 1));
+    expect(find.text('Ready when you are'), findsOneWidget);
+
+    // Tap record, then give the platform real time: permission, encoder
+    // start-up and the recording itself are all real async work that
+    // pumpAndSettle's fake clock does not advance.
+    await tester.tap(find.bySemanticsLabel('Start recording'));
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(seconds: 3)),
+    );
+    await tester.pumpAndSettle(const Duration(seconds: 2));
+
+    // Asserting the *outcome* rather than the button's intermediate state: by
+    // the time the frames settle, the take may already have finished and handed
+    // off. What matters is that the widget's audio path ran and produced
+    // something reviewable.
+    if (find.bySemanticsLabel('Stop recording').evaluate().isNotEmpty) {
+      await tester.tap(find.bySemanticsLabel('Stop recording'));
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(seconds: 2)),
+      );
+      await tester.pumpAndSettle(const Duration(seconds: 2));
+    }
+
+    // Review is where a finished take lands (§13).
+    expect(find.text('Save entry'), findsOneWidget,
+        reason: 'an audio take should hand off to review');
+    // And the size estimate proves the profile was actually applied: this only
+    // renders once a real recording exists behind it.
+    expect(
+      find.textContaining('kbps'),
+      findsOneWidget,
+      reason: 'review should state the profile the audio was captured at',
+    );
+
+    final estimate = tester
+        .widgetList<Text>(find.byType(Text))
+        .map((t) => t.data)
+        .whereType<String>()
+        .firstWhere((t) => t.contains('kbps'));
+    debugPrint('WIDGET AUDIO: reached review — $estimate');
+  });
 
   testWidgets('a saved recording round-trips through the database',
       (tester) async => tester.runAsync(() async {

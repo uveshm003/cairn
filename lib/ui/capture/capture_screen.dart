@@ -233,8 +233,8 @@ class _CaptureScreenState extends State<CaptureScreen>
   /// Flips to the next lens the device actually has.
   ///
   /// Uses `setDescription` rather than rebuilding the controller: it disposes
-  /// and re-initialises internally, and it is the only path that also works
-  /// while a recording is in progress.
+  /// and re-initialises internally, which is fewer moving parts than managing
+  /// two controllers.
   Future<void> _flipCamera() async {
     final controller = _camera;
     final current = _lens;
@@ -256,12 +256,15 @@ class _CaptureScreenState extends State<CaptureScreen>
             );
       }
     } on CameraException catch (e) {
-      if (mounted) {
-        setState(() {
-          _lens = current;
-          _error = 'Could not switch camera (${e.code}).';
-        });
-      }
+      if (!mounted) return;
+      // Deliberately not `_error`: that replaces the viewfinder with the retry
+      // panel, and the original camera is still open and working. `_error` only
+      // clears on a full re-prepare, so one transient flip failure would strand
+      // the screen. A snackbar says what happened and leaves capture usable.
+      setState(() => _lens = current);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not switch camera (${e.code}).')),
+      );
     }
   }
 
@@ -523,11 +526,22 @@ class _CaptureScreenState extends State<CaptureScreen>
             width: 48,
             child: _medium == Medium.video && canFlipCamera(_cameras)
                 ? IconButton(
-                    icon: const Icon(Icons.cameraswitch_outlined,
-                        color: _chromeText),
+                    icon: Icon(
+                      Icons.cameraswitch_outlined,
+                      color: _recording ? _chromeMuted : _chromeText,
+                    ),
                     tooltip: 'Switch to '
                         '${(nextLens(_cameras, current: _lens ?? CameraLensDirection.back) ?? CameraLensDirection.front).label}',
-                    onPressed: _flipCamera,
+                    // Disabled mid-take, like every other control here (close,
+                    // type pill, medium toggle).
+                    //
+                    // Not for fear of losing the recording: camera 0.12's
+                    // `startVideoRecording` defaults `enablePersistentRecording`
+                    // to true, and a persistent recording explicitly ignores
+                    // `setDescription` calls made while it runs. The reason is
+                    // simpler — a take that changes lens halfway is a feature
+                    // nobody asked for, and the mid-record path is untested.
+                    onPressed: _recording ? null : _flipCamera,
                   )
                 : null,
           ),
