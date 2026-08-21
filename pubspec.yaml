@@ -76,6 +76,7 @@ dev_dependencies:
 
   drift_dev: ^2.34.5
   build_runner: ^2.15.1
+  flutter_launcher_icons: ^0.14.4
 
   # The "flutter_lints" package below contains a set of recommended lints to
   # encourage good coding practices. The lint set provided by the package is
@@ -89,11 +90,28 @@ dev_dependencies:
 
 # The following section is specific to Flutter packages.
 flutter:
-
-  # The following line ensures that the Material Icons font is
-  # included with your application, so that you can use the icons in
-  # the material Icons class.
   uses-material-design: true
+
+  # Bundled, not fetched. An offline app cannot rely on a font CDN, and the
+  # type is half of what makes this not look like stock Material.
+  fonts:
+    # UI text.
+    - family: Inter
+      fonts:
+        - asset: assets/fonts/Inter-400.ttf
+          weight: 400
+        - asset: assets/fonts/Inter-500.ttf
+          weight: 500
+        - asset: assets/fonts/Inter-600.ttf
+          weight: 600
+    # Display serif for titles. The 144pt optical cut specifically -- Fraunces'
+    # small-text cuts are sturdier and read clumsy at 28pt and up.
+    - family: Fraunces
+      fonts:
+        - asset: assets/fonts/Fraunces-500.ttf
+          weight: 500
+        - asset: assets/fonts/Fraunces-600.ttf
+          weight: 600
 
   # To add assets to your application, add an assets section, like this:
   # assets:
@@ -125,3 +143,17 @@ flutter:
   #
   # For details regarding fonts from package dependencies,
   # see https://flutter.dev/to/font-from-package
+
+# App icon. One 1024 master fans out to both platforms:
+#   dart run flutter_launcher_icons
+# The master is deliberately RGB with no alpha -- Xcode and App Store validation
+# reject an iOS icon that has an alpha channel.
+flutter_launcher_icons:
+  image_path: assets/icon/cairn_icon.png
+  android: true
+  ios: true
+  remove_alpha_ios: true
+  # Adaptive icon: the launcher crops hard, so the foreground art is drawn
+  # smaller and sits on the brand ink.
+  adaptive_icon_background: "#1A1815"
+  adaptive_icon_foreground: assets/icon/cairn_icon_foreground.png

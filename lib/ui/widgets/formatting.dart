@@ -10,6 +10,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 import '../../data/database.dart';
+import '../theme/tokens.dart';
 
 String formatBytes(int bytes) {
   if (bytes < 1024) return '$bytes B';
@@ -65,6 +66,27 @@ String formatWhen(DateTime when) {
 
 String formatDateOnly(DateTime when) => DateFormat.yMMMd().format(when);
 
+/// Time alone. Used inside a day-grouped list, where repeating the date the
+/// heading already states is noise.
+String formatTimeOnly(DateTime when) => DateFormat.jm().format(when);
+
+/// Day heading for the grouped library: "Today", "Yesterday", a weekday name
+/// for the last week, then a date. Uppercased by the eyebrow style, so this
+/// returns natural case.
+String formatDayHeading(DateTime day) {
+  final now = DateTime.now();
+  final today = DateTime(now.year, now.month, now.day);
+  final delta = today.difference(DateTime(day.year, day.month, day.day)).inDays;
+
+  if (delta == 0) return 'Today';
+  if (delta == 1) return 'Yesterday';
+  // Inside the last week a weekday is more use than a date -- "Tuesday" is how
+  // people actually remember a recording.
+  if (delta < 7) return DateFormat.EEEE().format(day);
+  if (day.year == now.year) return DateFormat.MMMMd().format(day);
+  return DateFormat.yMMMMd().format(day);
+}
+
 /// The auto-title fallback from S6: `{Type} · {date} {time}`.
 String autoTitle(String typeName, DateTime recordedAt) =>
     '$typeName · ${DateFormat.yMMMd().add_jm().format(recordedAt)}';
@@ -90,19 +112,14 @@ IconData iconForKey(String key) => switch (key) {
       _ => Icons.circle_outlined,
     };
 
-/// Accent colour for a type's `colorKey`. Deliberately muted: these are the only
-/// saturated colours in the app, so they mark type without shouting (S14).
-Color colorForKey(String key, Brightness brightness) {
-  final dark = brightness == Brightness.dark;
-  return switch (key) {
-    'amber' => dark ? const Color(0xFFD9A441) : const Color(0xFFA97514),
-    'indigo' => dark ? const Color(0xFF8C9EFF) : const Color(0xFF4A5BB5),
-    'teal' => dark ? const Color(0xFF63C5B5) : const Color(0xFF17766A),
-    'rose' => dark ? const Color(0xFFE288A0) : const Color(0xFFAE4665),
-    'slate' => dark ? const Color(0xFF9FB0BA) : const Color(0xFF56676F),
-    _ => dark ? const Color(0xFF9FB0BA) : const Color(0xFF56676F),
-  };
-}
+/// Accent colour for a type's `colorKey`.
+///
+/// Delegates to the palette so the type marks and the rest of the theme cannot
+/// drift apart. Kept as a free function because call sites read better as
+/// `colorForKey(item.colorKey, theme.brightness)` than a palette lookup.
+Color colorForKey(String key, Brightness brightness) =>
+    (brightness == Brightness.dark ? CairnPalette.dark : CairnPalette.light)
+        .typeColor(key);
 
 IconData iconForMedium(Medium medium) =>
     medium == Medium.audio ? Icons.mic_none : Icons.videocam_outlined;

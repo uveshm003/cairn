@@ -15,7 +15,7 @@ onboarding persists.
 | | |
 |---|---|
 | `flutter analyze` | clean |
-| `flutter test` | 84 passing |
+| `flutter test` | 113 passing |
 | `flutter test integration_test/ -d <device>` | 6 passing, on a Pixel 7 Pro |
 | `flutter build apk --release` | builds (65.2 MB) |
 | `flutter build ios --release --no-codesign` | builds (23.0 MB) |
@@ -48,6 +48,60 @@ lib/
   settings/    app_settings.dart     key-value settings
   ui/          library capture detail settings trash onboarding lab
 ```
+
+## Design
+
+The visual language lives in `lib/ui/theme/`. Screens never invent a colour, a
+gap, or a radius — `tokens.dart` owns all three, and `context.palette` reaches
+tokens Material's `ColorScheme` has no slot for (`inkTertiary`, `hairline`,
+`record`).
+
+**Warm stone and paper, one accent.** §14 asks for "monochrome-friendly", and the
+name supplies the rest: a cairn is a stack of weathered stones. Light mode is a
+warm paper canvas; dark is a warm near-black. The single trail-marker ochre
+carries actions and selection, and the only other saturated colours in the app
+are the five per-type marks.
+
+**Type carries the personality.** Fraunces (144pt optical cut) for display,
+Inter for everything functional — both bundled as assets, because an offline app
+cannot depend on a font CDN. Fraunces' smaller optical cuts read clumsy above
+28pt, hence the explicit `opsz` pin.
+
+**Contrast is computed, not eyeballed.** `test/theme_test.dart` calculates real
+WCAG ratios for every text token against both surfaces, plus accent-on-accent-soft
+and the type marks. It found a genuine defect during this pass: accent text on a
+selected chip measured 4.27:1, so the light accent was darkened to clear 4.5:1
+with margin.
+
+**Dynamic type is tested, not hoped for.** `test/dynamic_type_test.dart` pumps the
+library components at 1×–2× text scale on narrow screens. It found two real
+clipping bugs (the meta line and the tag row), both now flow layouts that grow
+the card rather than hide content.
+
+**The mark is painted, not an asset.** `CairnMark` and `CairnScene` are
+`CustomPainter`s, so they inherit the palette and scale to any size. The same
+geometry generates the app icon (`assets/icon/`, fanned out by
+`flutter_launcher_icons`), so the launcher icon, the wordmark, and the empty
+state are visibly the same object.
+
+**Journal, not file browser.** The library groups entries under day headings
+("Today", "Yesterday", "Tuesday"), because that is how people actually remember a
+recording. Grouping is suppressed while searching — the query orders by
+relevance then, and day headers over a relevance-ordered list would repeat.
+
+### Reviewing the UI with content
+
+An empty app is hard to judge. A debug-only, flag-gated seeder fills the library
+with a realistic set:
+
+```sh
+flutter run --dart-define=CAIRN_SEED_DEMO=true
+```
+
+Guarded three ways — the flag, `kDebugMode`, and "only if the library is empty" —
+and const-false in release, so the whole path is tree-shaken away. Optional:
+push placeholder frames to `/data/local/tmp/cairnthumbs` first and the seeder
+copies them in as thumbnails. `adb shell pm clear com.example.cairn` undoes it.
 
 ## The decisions worth knowing
 
@@ -154,6 +208,9 @@ Being explicit, because a green test suite is not the same as a working feature:
   black rectangle.
 - **Export's share sheet** has not been driven end to end, though the archive
   itself is round-trip tested (14 tests).
+- **The capture screen's design** has been built but not seen with a live camera
+  preview behind it — the scrims, the type pill, and the record button are
+  verified only against the audio stage and widget tests.
 - **Location capture** is wired (opt-in, off by default, coarse accuracy, 6s
   timeout, saves without coordinates on any failure) but has not been exercised
   on hardware.

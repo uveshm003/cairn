@@ -1,9 +1,12 @@
-/// Capture (requirements.md S13): live duration against the type's limit,
+/// Capture (requirements.md §13): live duration against the type's limit,
 /// auto-stop at the cap, then straight into review.
 ///
 /// Video and audio share one screen so the medium is a toggle rather than a
-/// separate destination — which is what keeps capture within the two-tap budget
-/// in S5 regardless of which one the user wants.
+/// separate destination — which is what keeps capture inside §5's two-tap budget
+/// whichever one the user wants.
+///
+/// The chrome is dark in both themes. A viewfinder with a paper-white surround
+/// fights the image, and every camera the user already knows is dark here.
 library;
 
 import 'dart:async';
@@ -11,14 +14,23 @@ import 'dart:io';
 
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:record/record.dart';
 
 import '../../app.dart';
 import '../../data/database.dart';
 import '../../domain/encoding_profile.dart';
+import '../theme/cairn_theme.dart';
+import '../theme/tokens.dart';
+import '../widgets/cairn_mark.dart';
 import '../widgets/formatting.dart';
 import 'capture_flow.dart';
 import 'review_screen.dart';
+
+/// Fixed chrome colours: this screen does not follow the light/dark palette.
+const _chrome = Color(0xFF0B0B0C);
+const _chromeText = Color(0xFFF4F2EE);
+const _chromeMuted = Color(0xFF9A968F);
 
 class CaptureScreen extends StatefulWidget {
   const CaptureScreen({super.key, required this.initialType});
@@ -47,14 +59,16 @@ class _CaptureScreenState extends State<CaptureScreen>
   double _level = 0;
   StreamSubscription<Amplitude>? _amplitudeSub;
 
-  /// Path the recorder is writing to, so it can be cleaned up on a discard.
   String? _pendingPath;
 
   int get _maxMs {
-    // The type's cap, but never above the global hard ceiling (S6).
+    // The type's cap, never above the global ceiling (§6).
     final hardCap = AppScope.of(context).settings.hardCapMs.value;
     return _type.maxDurationMs < hardCap ? _type.maxDurationMs : hardCap;
   }
+
+  double get _progress =>
+      (_elapsed.inMilliseconds / _maxMs).clamp(0.0, 1.0).toDouble();
 
   bool get _nearLimit => _elapsed.inMilliseconds > _maxMs - 10000;
 
@@ -62,8 +76,8 @@ class _CaptureScreenState extends State<CaptureScreen>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    // If the remembered type is video-only there is nothing to decide; if it is
-    // audio-only, start in audio so the first tap does the right thing.
+    // Light status-bar glyphs, because the chrome is dark regardless of theme.
+    SystemChrome.setSystemUIOverlayStyle(SystemUiOverlayStyle.light);
     if (_type.allowedMedium == AllowedMedium.audioOnly) _medium = Medium.audio;
     _prepare();
   }
@@ -71,6 +85,7 @@ class _CaptureScreenState extends State<CaptureScreen>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    SystemChrome.setSystemUIOverlayStyle(SystemUiOverlayStyle.dark);
     _ticker?.cancel();
     _amplitudeSub?.cancel();
     _camera?.dispose();
@@ -80,12 +95,10 @@ class _CaptureScreenState extends State<CaptureScreen>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    // S14: survive a mid-record interruption without corrupting anything. A
-    // call or a task switch releases the camera, so stop cleanly and keep what
-    // was captured rather than losing the file.
-    if (state == AppLifecycleState.inactive && _recording) {
-      _stop();
-    }
+    // §14: survive a mid-record interruption without corrupting anything. A call
+    // or task switch releases the camera, so stop cleanly and keep what was
+    // captured rather than losing the file.
+    if (state == AppLifecycleState.inactive && _recording) _stop();
   }
 
   Future<void> _prepare() async {
@@ -117,8 +130,8 @@ class _CaptureScreenState extends State<CaptureScreen>
       final controller = CameraController(
         cameras.first,
         // Capture near the phone's normal quality; the profile does the
-        // shrinking afterwards (S8). Capturing low would throw away detail the
-        // compressor could have spent its bitrate on.
+        // shrinking afterwards (§8). Capturing low would throw away detail the
+        // compressor could otherwise have spent its bitrate on.
         ResolutionPreset.high,
         enableAudio: true,
       );
@@ -135,8 +148,8 @@ class _CaptureScreenState extends State<CaptureScreen>
       if (!mounted) return;
       setState(() {
         _error = e.code == 'CameraAccessDenied'
-            ? 'Cairn needs the camera to record video entries. '
-                'You can allow it in Settings.'
+            ? 'Cairn needs the camera to record video entries. You can allow '
+                'it in Settings.'
             : 'Camera unavailable (${e.code}).';
         _initialising = false;
       });
@@ -148,7 +161,7 @@ class _CaptureScreenState extends State<CaptureScreen>
     setState(() => _medium = medium);
 
     // A video-only type cannot hold an audio entry, so move to one that can
-    // rather than silently recording something that will fail validation.
+    // rather than recording something that will fail validation.
     if (!typeAllowsMedium(_type, medium)) {
       final types = await AppScope.of(context).db.allTypes();
       final fallback = types.firstWhere(
@@ -170,8 +183,8 @@ class _CaptureScreenState extends State<CaptureScreen>
         if (camera == null) return;
         await camera.startVideoRecording();
       } else {
-        // S10.4: the OS prompt appears here, at first record, rather than up
-        // front on a permissions screen.
+        // §10.4: the OS prompt appears here, at first record, rather than on an
+        // up-front permissions screen.
         if (!await _recorder.hasPermission()) {
           if (mounted) {
             setState(() => _error =
@@ -183,16 +196,15 @@ class _CaptureScreenState extends State<CaptureScreen>
         final path = scope.store.newMediaPath('m4a');
         _pendingPath = path;
         // Audio bitrate is set HERE, not in post: flutter_compress exposes
-        // audioBitrateKbps on iOS only, so capture time is the only place the
-        // S8 audio ladder can be applied on both platforms.
+        // audioBitrateKbps on iOS only, so capture time is the only place §8's
+        // audio ladder can be applied on both platforms.
         await _recorder.start(profile.audioConfig, path: path);
         _amplitudeSub = _recorder
-            .onAmplitudeChanged(const Duration(milliseconds: 120))
+            .onAmplitudeChanged(const Duration(milliseconds: 90))
             .listen((amp) {
           if (!mounted) return;
-          // dBFS, roughly -60..0. Mapped to 0..1 for the level meter.
-          final normalised = ((amp.current + 50) / 50).clamp(0.0, 1.0);
-          setState(() => _level = normalised);
+          // dBFS, roughly -60..0, mapped to 0..1 for the meter.
+          setState(() => _level = ((amp.current + 50) / 50).clamp(0.0, 1.0));
         });
       }
     } catch (e) {
@@ -200,19 +212,20 @@ class _CaptureScreenState extends State<CaptureScreen>
       return;
     }
 
+    HapticFeedback.mediumImpact();
     _stopwatch = Stopwatch()..start();
     setState(() => _recording = true);
 
     _ticker = Timer.periodic(const Duration(milliseconds: 100), (_) {
       if (!mounted || !_recording) return;
       setState(() => _elapsed = _stopwatch?.elapsed ?? Duration.zero);
-      // S6: auto-stop at the limit rather than letting it run over.
+      // §6: auto-stop at the limit rather than letting it run over.
       if (_elapsed.inMilliseconds >= _maxMs) _stop();
     });
   }
 
   EncodingProfile _profile(AppScope scope) {
-    // The type decides, unless the user has set an explicit override (S8).
+    // The type decides, unless the user set an explicit override (§8).
     final override = scope.settings.profileOverride.value;
     return EncodingProfile.of(override ?? _type.encodingProfile);
   }
@@ -225,6 +238,7 @@ class _CaptureScreenState extends State<CaptureScreen>
     _amplitudeSub = null;
     final duration = _stopwatch?.elapsed ?? Duration.zero;
     setState(() => _recording = false);
+    HapticFeedback.lightImpact();
 
     String? path;
     try {
@@ -241,7 +255,7 @@ class _CaptureScreenState extends State<CaptureScreen>
 
     if (path == null || !mounted) return;
 
-    // A recording so short it holds nothing is a mis-tap, not an entry.
+    // A recording too short to hold anything is a mis-tap, not an entry.
     if (duration.inMilliseconds < 400) {
       await File(path).delete().catchError((_) => File(path!));
       if (mounted) {
@@ -268,7 +282,6 @@ class _CaptureScreenState extends State<CaptureScreen>
     if (saved == true) {
       Navigator.of(context).pop();
     } else {
-      // Discarded: back to a clean capture screen for another take.
       setState(() {
         _elapsed = Duration.zero;
         _pendingPath = null;
@@ -278,70 +291,60 @@ class _CaptureScreenState extends State<CaptureScreen>
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final accent = colorForKey(_type.colorKey, theme.brightness);
-    final dark = _medium == Medium.video;
-
     return Scaffold(
-      backgroundColor: dark ? Colors.black : theme.colorScheme.surface,
-      appBar: AppBar(
-        backgroundColor: dark ? Colors.black : theme.colorScheme.surface,
-        foregroundColor: dark ? Colors.white : theme.colorScheme.onSurface,
-        leading: IconButton(
-          icon: const Icon(Icons.close),
-          onPressed: _recording ? null : () => Navigator.of(context).pop(),
-        ),
-        title: TextButton.icon(
-          onPressed: _recording
-              ? null
-              : () async {
-                  final picked = await showTypePicker(
-                    context,
-                    current: _type,
-                    forMedium: _medium,
-                  );
-                  if (picked != null && mounted) {
-                    setState(() => _type = picked);
-                  }
-                },
-          icon: Icon(iconForKey(_type.iconKey), size: 18, color: accent),
-          label: Text(
-            _type.name,
-            style: TextStyle(
-              color: dark ? Colors.white : theme.colorScheme.onSurface,
+      backgroundColor: _chrome,
+      body: Stack(
+        fit: StackFit.expand,
+        children: [
+          _buildViewfinder(),
+          // Gradient scrims top and bottom so the chrome stays legible over any
+          // frame, without a solid bar cropping the picture.
+          const _Scrim(alignment: Alignment.topCenter),
+          const _Scrim(alignment: Alignment.bottomCenter),
+          SafeArea(
+            child: Column(
+              children: [
+                _buildTopBar(),
+                const Spacer(),
+                _buildControls(),
+              ],
             ),
           ),
-        ),
-      ),
-      body: Column(
-        children: [
-          Expanded(child: _buildViewfinder(theme, accent)),
-          _buildControls(theme, dark),
         ],
       ),
     );
   }
 
-  Widget _buildViewfinder(ThemeData theme, Color accent) {
+  Widget _buildViewfinder() {
     if (_error != null) {
       return Center(
         child: Padding(
-          padding: const EdgeInsets.all(32),
+          padding: const EdgeInsets.all(Space.xxl),
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               Icon(Icons.videocam_off_outlined,
-                  size: 40, color: theme.colorScheme.error),
-              const SizedBox(height: 16),
+                  size: 34, color: _chromeMuted),
+              const SizedBox(height: Space.lg),
               Text(
                 _error!,
                 textAlign: TextAlign.center,
-                style: theme.textTheme.bodyMedium?.copyWith(
-                  color: _medium == Medium.video ? Colors.white70 : null,
+                style: const TextStyle(
+                  fontFamily: CairnType.body,
+                  color: _chromeText,
+                  fontSize: 14.5,
+                  height: 1.45,
                 ),
               ),
-              const SizedBox(height: 20),
-              OutlinedButton(onPressed: _prepare, child: const Text('Retry')),
+              const SizedBox(height: Space.xl),
+              OutlinedButton(
+                onPressed: _prepare,
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: _chromeText,
+                  side: const BorderSide(color: Color(0xFF3A3A3C)),
+                ),
+                child: const Text('Try again'),
+              ),
             ],
           ),
         ),
@@ -349,180 +352,450 @@ class _CaptureScreenState extends State<CaptureScreen>
     }
 
     if (_initialising) {
-      return const Center(child: CircularProgressIndicator());
+      return const Center(
+        child: SizedBox(
+          width: 22,
+          height: 22,
+          child: CircularProgressIndicator(strokeWidth: 2, color: _chromeMuted),
+        ),
+      );
     }
 
     if (_medium == Medium.audio) {
-      return _AudioViewfinder(
-        level: _level,
-        recording: _recording,
-        accent: accent,
-      );
+      return _AudioStage(level: _level, recording: _recording);
     }
 
     final camera = _camera;
     if (camera == null) return const SizedBox.shrink();
-    return Center(child: CameraPreview(camera));
+    // Cover rather than contain: a letterboxed preview inside a dark screen
+    // looks like a bug, and the crop matches what a camera app would show.
+    return FittedBox(
+      fit: BoxFit.cover,
+      clipBehavior: Clip.hardEdge,
+      child: SizedBox(
+        width: camera.value.previewSize?.height ?? 1080,
+        height: camera.value.previewSize?.width ?? 1920,
+        child: CameraPreview(camera),
+      ),
+    );
   }
 
-  Widget _buildControls(ThemeData theme, bool dark) {
-    final onDark = dark ? Colors.white : theme.colorScheme.onSurface;
-    final remaining = _maxMs - _elapsed.inMilliseconds;
-
-    return Container(
-      padding: const EdgeInsets.fromLTRB(20, 16, 20, 28),
-      color: dark ? Colors.black : theme.colorScheme.surface,
-      child: Column(
+  Widget _buildTopBar() {
+    final accent = context.palette.typeColor(_type.colorKey);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(Space.sm, Space.xs, Space.sm, 0),
+      child: Row(
         children: [
-          // Live duration against the limit (S13).
-          Text(
-            '${formatClock(_elapsed.inMilliseconds)} / ${formatClock(_maxMs)}',
-            style: theme.textTheme.titleMedium?.copyWith(
-              color: _nearLimit && _recording ? theme.colorScheme.error : onDark,
-              fontFeatures: const [FontFeature.tabularFigures()],
+          IconButton(
+            icon: const Icon(Icons.close, color: _chromeText),
+            tooltip: 'Cancel',
+            onPressed: _recording ? null : () => Navigator.of(context).pop(),
+          ),
+          const Spacer(),
+          // Type is the one thing worth changing mid-flow, so it sits front and
+          // centre as a tappable pill rather than buried in a menu.
+          _TypePill(
+            label: _type.name,
+            accent: accent,
+            enabled: !_recording,
+            onTap: () async {
+              final picked = await showTypePicker(
+                context,
+                current: _type,
+                forMedium: _medium,
+              );
+              if (picked != null && mounted) setState(() => _type = picked);
+            },
+          ),
+          const Spacer(),
+          // Balances the close button so the pill is genuinely centred.
+          const SizedBox(width: 48),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildControls() {
+    final remaining = _maxMs - _elapsed.inMilliseconds;
+    final canRecord = _error == null && !_initialising;
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(Space.gutter, 0, Space.gutter, Space.xl),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // Medium toggle, hidden while recording — switching mid-take is not a
+          // thing, and removing it keeps the running screen quiet.
+          _FadeSlot(
+            visible: !_recording,
+            child: _MediumToggle(
+              medium: _medium,
+              onChanged: _switchMedium,
             ),
           ),
-          const SizedBox(height: 6),
-          SizedBox(
-            height: 18,
-            child: _recording && _nearLimit
-                // S6 calls for a warning near the limit, not just a silent cut.
-                ? Text(
-                    'Stopping in ${(remaining / 1000).ceil()}s',
-                    style: theme.textTheme.labelSmall
-                        ?.copyWith(color: theme.colorScheme.error),
-                  )
-                : _recording
-                    ? const SizedBox.shrink()
-                    : SegmentedButton<Medium>(
-                        style: const ButtonStyle(
-                          visualDensity: VisualDensity.compact,
-                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                        ),
-                        segments: const [
-                          ButtonSegment(
-                            value: Medium.video,
-                            icon: Icon(Icons.videocam_outlined, size: 16),
-                            label: Text('Video'),
-                          ),
-                          ButtonSegment(
-                            value: Medium.audio,
-                            icon: Icon(Icons.mic_none, size: 16),
-                            label: Text('Audio'),
-                          ),
-                        ],
-                        selected: {_medium},
-                        onSelectionChanged: (s) => _switchMedium(s.first),
-                      ),
+          const SizedBox(height: Space.lg),
+          _TimeReadout(
+            elapsedMs: _elapsed.inMilliseconds,
+            maxMs: _maxMs,
+            progress: _progress,
+            recording: _recording,
+            nearLimit: _nearLimit,
+            remainingMs: remaining,
           ),
-          const SizedBox(height: 20),
-          Semantics(
-            button: true,
-            label: _recording ? 'Stop recording' : 'Start recording',
-            child: GestureDetector(
-              onTap: _error != null || _initialising
-                  ? null
-                  : (_recording ? _stop : _start),
-              child: Container(
-                width: 74,
-                height: 74,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: _recording ? Colors.white : const Color(0xFFD64545),
-                  border: Border.all(
-                    color: dark ? Colors.white24 : theme.colorScheme.outline,
-                    width: 3,
+          const SizedBox(height: Space.lg),
+          RecordButton(
+            recording: _recording,
+            enabled: canRecord,
+            onTap: _recording ? _stop : _start,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Fades a control in and out without shifting layout, so the record button
+/// never moves as the toggle disappears. Named to avoid shadowing Flutter's
+/// AnimatedSwitcher, which does something different.
+class _FadeSlot extends StatelessWidget {
+  const _FadeSlot({required this.visible, required this.child});
+
+  final bool visible;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedOpacity(
+      opacity: visible ? 1 : 0,
+      duration: Motion.fast,
+      child: IgnorePointer(ignoring: !visible, child: child),
+    );
+  }
+}
+
+class _Scrim extends StatelessWidget {
+  const _Scrim({required this.alignment});
+
+  final Alignment alignment;
+
+  @override
+  Widget build(BuildContext context) {
+    final top = alignment == Alignment.topCenter;
+    return Align(
+      alignment: alignment,
+      child: IgnorePointer(
+        child: Container(
+          height: top ? 140 : 260,
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: top ? Alignment.topCenter : Alignment.bottomCenter,
+              end: top ? Alignment.bottomCenter : Alignment.topCenter,
+              colors: [
+                Colors.black.withValues(alpha: top ? 0.55 : 0.75),
+                Colors.black.withValues(alpha: 0),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _TypePill extends StatelessWidget {
+  const _TypePill({
+    required this.label,
+    required this.accent,
+    required this.enabled,
+    required this.onTap,
+  });
+
+  final String label;
+  final Color accent;
+  final bool enabled;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Opacity(
+      opacity: enabled ? 1 : 0.5,
+      child: Material(
+        color: Colors.white.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(Radii.pill),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(Radii.pill),
+          onTap: enabled ? onTap : null,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(
+              horizontal: Space.md + 2,
+              vertical: Space.sm,
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 7,
+                  height: 7,
+                  decoration: BoxDecoration(color: accent, shape: BoxShape.circle),
+                ),
+                const SizedBox(width: Space.sm),
+                Text(
+                  label,
+                  style: const TextStyle(
+                    fontFamily: CairnType.body,
+                    color: _chromeText,
+                    fontSize: 13.5,
+                    fontWeight: FontWeight.w500,
                   ),
                 ),
-                child: Icon(
-                  _recording ? Icons.stop_rounded : Icons.fiber_manual_record,
-                  color: _recording ? const Color(0xFFD64545) : Colors.white,
-                  size: 34,
+                const SizedBox(width: Space.xs),
+                const Icon(Icons.expand_more, size: 16, color: _chromeMuted),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _MediumToggle extends StatelessWidget {
+  const _MediumToggle({required this.medium, required this.onChanged});
+
+  final Medium medium;
+  final ValueChanged<Medium> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(3),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(Radii.pill),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          for (final option in Medium.values)
+            _ToggleSegment(
+              label: option == Medium.audio ? 'Audio' : 'Video',
+              icon: iconForMedium(option),
+              selected: option == medium,
+              onTap: () => onChanged(option),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ToggleSegment extends StatelessWidget {
+  const _ToggleSegment({
+    required this.label,
+    required this.icon,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String label;
+  final IconData icon;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: Motion.fast,
+        padding: const EdgeInsets.symmetric(
+          horizontal: Space.md + 2,
+          vertical: Space.sm - 1,
+        ),
+        decoration: BoxDecoration(
+          color: selected ? _chromeText : Colors.transparent,
+          borderRadius: BorderRadius.circular(Radii.pill),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 15, color: selected ? _chrome : _chromeMuted),
+            const SizedBox(width: Space.xs + 2),
+            Text(
+              label,
+              style: TextStyle(
+                fontFamily: CairnType.body,
+                fontSize: 13,
+                fontWeight: FontWeight.w500,
+                color: selected ? _chrome : _chromeMuted,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Elapsed time, the limit, and a hairline that fills toward it.
+class _TimeReadout extends StatelessWidget {
+  const _TimeReadout({
+    required this.elapsedMs,
+    required this.maxMs,
+    required this.progress,
+    required this.recording,
+    required this.nearLimit,
+    required this.remainingMs,
+  });
+
+  final int elapsedMs;
+  final int maxMs;
+  final double progress;
+  final bool recording;
+  final bool nearLimit;
+  final int remainingMs;
+
+  @override
+  Widget build(BuildContext context) {
+    final warn = recording && nearLimit;
+    final record = context.palette.record;
+
+    return Column(
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          crossAxisAlignment: CrossAxisAlignment.baseline,
+          textBaseline: TextBaseline.alphabetic,
+          children: [
+            if (recording) ...[
+              Container(
+                width: 7,
+                height: 7,
+                decoration: BoxDecoration(color: record, shape: BoxShape.circle),
+              ),
+              const SizedBox(width: Space.sm),
+            ],
+            Text(
+              formatClock(elapsedMs),
+              style: TextStyle(
+                fontFamily: CairnType.body,
+                fontSize: 32,
+                height: 1.1,
+                fontWeight: FontWeight.w500,
+                letterSpacing: 0.5,
+                color: warn ? record : _chromeText,
+                // Tabular, so the readout does not jitter as digits change.
+                fontFeatures: const [FontFeature.tabularFigures()],
+              ),
+            ),
+            Text(
+              ' / ${formatClock(maxMs)}',
+              style: const TextStyle(
+                fontFamily: CairnType.body,
+                fontSize: 14,
+                fontWeight: FontWeight.w400,
+                color: _chromeMuted,
+                fontFeatures: [FontFeature.tabularFigures()],
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: Space.md),
+        // The limit made visible, so auto-stop is never a surprise (§6).
+        ClipRRect(
+          borderRadius: BorderRadius.circular(Radii.pill),
+          child: SizedBox(
+            width: 190,
+            height: 3,
+            child: LinearProgressIndicator(
+              value: progress,
+              backgroundColor: Colors.white.withValues(alpha: 0.18),
+              valueColor: AlwaysStoppedAnimation(warn ? record : _chromeText),
+            ),
+          ),
+        ),
+        // §6 asks for a warning near the limit, not just a silent cut. Rendered
+        // in a slot that is always present so nothing shifts when it appears.
+        SizedBox(
+          height: 26,
+          child: Center(
+            child: AnimatedOpacity(
+              opacity: warn ? 1 : 0,
+              duration: Motion.fast,
+              child: Text(
+                'Stopping in ${(remainingMs / 1000).ceil()}s',
+                style: TextStyle(
+                  fontFamily: CairnType.body,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w500,
+                  color: record,
                 ),
               ),
             ),
           ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 }
 
 /// Audio has no picture, so it gets a level meter — enough to confirm the mic is
-/// actually hearing something, which is the one thing that goes wrong silently.
-class _AudioViewfinder extends StatelessWidget {
-  const _AudioViewfinder({
-    required this.level,
-    required this.recording,
-    required this.accent,
-  });
+/// actually hearing something, which is the one thing that fails silently.
+class _AudioStage extends StatelessWidget {
+  const _AudioStage({required this.level, required this.recording});
 
   final double level;
   final bool recording;
-  final Color accent;
+
+  /// A fixed envelope, scaled by the live level, so the meter reads as one
+  /// waveform rather than 15 unrelated bars.
+  static const _envelope = [
+    0.22, 0.34, 0.46, 0.58, 0.72, 0.86, 0.95, 1.0,
+    0.95, 0.86, 0.72, 0.58, 0.46, 0.34, 0.22,
+  ];
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          SizedBox(
-            height: 90,
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                for (var i = 0; i < 13; i++)
-                  _Bar(
-                    // A fixed shape scaled by the live level, so the meter
-                    // reads as one waveform rather than 13 unrelated bars.
-                    height: recording
-                        ? 8 + 70 * level * _shape(i)
-                        : 8,
-                    color: accent,
-                  ),
-              ],
+    final accent = context.palette.accent;
+    return ColoredBox(
+      color: _chrome,
+      child: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            SizedBox(
+              height: 120,
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  for (final weight in _envelope)
+                    AnimatedContainer(
+                      duration: const Duration(milliseconds: 110),
+                      curve: Curves.easeOut,
+                      width: 5,
+                      height: recording ? 6 + 108 * level * weight : 6,
+                      margin: const EdgeInsets.symmetric(horizontal: 3),
+                      decoration: BoxDecoration(
+                        color: recording
+                            ? accent
+                            : _chromeMuted.withValues(alpha: 0.5),
+                        borderRadius: BorderRadius.circular(3),
+                      ),
+                    ),
+                ],
+              ),
             ),
-          ),
-          const SizedBox(height: 24),
-          Text(
-            recording ? 'Listening' : 'Ready',
-            style: theme.textTheme.bodyMedium
-                ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
-          ),
-        ],
-      ),
-    );
-  }
-
-  /// Taller in the middle, tapering out — a plausible waveform envelope.
-  double _shape(int i) {
-    const weights = [
-      0.25, 0.4, 0.55, 0.7, 0.85, 0.95, 1.0, 0.95, 0.85, 0.7, 0.55, 0.4, 0.25,
-    ];
-    return weights[i];
-  }
-}
-
-class _Bar extends StatelessWidget {
-  const _Bar({required this.height, required this.color});
-
-  final double height;
-  final Color color;
-
-  @override
-  Widget build(BuildContext context) {
-    return AnimatedContainer(
-      duration: const Duration(milliseconds: 120),
-      curve: Curves.easeOut,
-      width: 6,
-      height: height,
-      margin: const EdgeInsets.symmetric(horizontal: 3),
-      decoration: BoxDecoration(
-        color: color,
-        borderRadius: BorderRadius.circular(3),
+            const SizedBox(height: Space.xxl),
+            Text(
+              recording ? 'Listening' : 'Ready when you are',
+              style: const TextStyle(
+                fontFamily: CairnType.body,
+                fontSize: 14,
+                color: _chromeMuted,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

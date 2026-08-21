@@ -1,5 +1,10 @@
-/// Entry detail (requirements.md S13): player, metadata, tags, note, edit,
+/// Entry detail (requirements.md §13): player, metadata, tags, note, edit,
 /// favourite, delete, and the "space saved" stat.
+///
+/// Laid out as a page rather than a form: the media sits at the top, the title
+/// is set in the display serif, and the note reads as prose. The technical
+/// metadata is real and worth keeping, but it goes last — an entry is something
+/// you made, not a file you inspect.
 library;
 
 import 'package:drift/drift.dart' show Value;
@@ -7,6 +12,8 @@ import 'package:flutter/material.dart';
 
 import '../../app.dart';
 import '../../data/database.dart';
+import '../theme/cairn_theme.dart';
+import '../theme/tokens.dart';
 import '../widgets/formatting.dart';
 import '../widgets/media_preview.dart';
 import '../widgets/tag_editor.dart';
@@ -25,7 +32,6 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
   final _titleController = TextEditingController();
   final _noteController = TextEditingController();
   List<String> _tagNames = [];
-  bool _loadedTags = false;
 
   @override
   void dispose() {
@@ -39,7 +45,6 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
     final tagIds = await db.tagIdsFor(entry.id);
     final allTags = await db.allTags();
     if (!mounted) return;
-
     setState(() {
       _titleController.text = entry.title ?? '';
       _noteController.text = entry.note ?? '';
@@ -47,7 +52,6 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
           .where((t) => tagIds.contains(t.id))
           .map((t) => t.name)
           .toList();
-      _loadedTags = true;
       _editing = true;
     });
   }
@@ -67,11 +71,9 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
 
     final ids = <int>[];
     for (final name in _tagNames) {
-      final tag = await db.ensureTag(name);
-      ids.add(tag.id);
+      ids.add((await db.ensureTag(name)).id);
     }
     await db.setEntryTags(entry.id, ids);
-
     if (mounted) setState(() => _editing = false);
   }
 
@@ -97,7 +99,6 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
       ),
     );
     if (confirmed != true || !mounted) return;
-
     await AppScope.of(context).db.moveToTrash(entry.id);
     if (mounted) Navigator.of(context).pop();
   }
@@ -114,9 +115,10 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
           return Scaffold(
             appBar: AppBar(),
             body: Center(
-              child: Text(snapshot.hasData
-                  ? 'This entry is gone.'
-                  : 'Loading…'),
+              child: Text(
+                snapshot.hasData ? 'This entry is gone.' : '',
+                style: Theme.of(context).textTheme.bodyMedium,
+              ),
             ),
           );
         }
@@ -126,31 +128,34 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
   }
 
   Widget _buildDetail(BuildContext context, AppScope scope, EntryRow entry) {
-    final theme = Theme.of(context);
+    final palette = context.palette;
+    final text = Theme.of(context).textTheme;
 
     return FutureBuilder<EntryTypeRow>(
       future: scope.db.typeById(entry.typeId),
       builder: (context, typeSnapshot) {
         final type = typeSnapshot.data;
         final typeName = type?.name ?? '';
+        final accent =
+            type == null ? palette.accent : palette.typeColor(type.colorKey);
         final missing = !scope.store.existsRelative(entry.filePath);
 
         return Scaffold(
+          backgroundColor: palette.canvas,
           appBar: AppBar(
-            title: Text(
-              _editing ? 'Edit entry' : displayTitle(entry, typeName),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
+            title: Text(_editing ? 'Edit' : '', style: text.titleMedium),
             actions: _editing
                 ? [
                     TextButton(
                       onPressed: () => setState(() => _editing = false),
                       child: const Text('Cancel'),
                     ),
-                    TextButton(
-                      onPressed: () => _saveEdits(entry),
-                      child: const Text('Save'),
+                    Padding(
+                      padding: const EdgeInsets.only(right: Space.sm),
+                      child: TextButton(
+                        onPressed: () => _saveEdits(entry),
+                        child: const Text('Done'),
+                      ),
                     ),
                   ]
                 : [
@@ -159,7 +164,10 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
                           ? 'Remove from favourites'
                           : 'Add to favourites',
                       icon: Icon(
-                        entry.isFavorite ? Icons.star : Icons.star_border,
+                        entry.isFavorite
+                            ? Icons.star_rounded
+                            : Icons.star_outline_rounded,
+                        color: entry.isFavorite ? palette.accent : palette.ink,
                       ),
                       onPressed: () =>
                           scope.db.setFavorite(entry.id, !entry.isFavorite),
@@ -174,47 +182,35 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
                       icon: const Icon(Icons.delete_outline),
                       onPressed: () => _delete(entry),
                     ),
+                    const SizedBox(width: Space.xs),
                   ],
           ),
           body: ListView(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 40),
+            padding: const EdgeInsets.fromLTRB(
+              Space.gutter,
+              0,
+              Space.gutter,
+              Space.huge,
+            ),
             children: [
               if (missing)
-                // S9's orphan case, surfaced honestly instead of as a broken
-                // player: the row survived but its file did not.
-                Container(
-                  padding: const EdgeInsets.all(14),
-                  margin: const EdgeInsets.only(bottom: 16),
-                  decoration: BoxDecoration(
-                    color: theme.colorScheme.errorContainer,
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Row(
-                    children: [
-                      Icon(Icons.link_off,
-                          color: theme.colorScheme.onErrorContainer),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Text(
-                          'The media file for this entry is missing. Its notes '
-                          'and tags are intact, but there is nothing to play.',
-                          style: TextStyle(
-                            color: theme.colorScheme.onErrorContainer,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
+                // §9's orphan case, stated honestly rather than shown as a
+                // broken player: the row survived but its file did not.
+                _Notice(
+                  icon: Icons.link_off,
+                  message: 'The media file for this entry is missing. Its note '
+                      'and tags are intact, but there is nothing to play.',
                 )
               else
                 MediaPreview(
-                  // Resolved from the stored relative path (S9).
+                  // Resolved from the stored relative path (§9).
                   path: scope.store.resolve(entry.filePath),
                   medium: entry.medium,
                   durationMs: entry.durationMs,
                 ),
-              const SizedBox(height: 20),
-              if (_editing && _loadedTags) ...[
+              const SizedBox(height: Space.xl),
+
+              if (_editing) ...[
                 TextField(
                   controller: _titleController,
                   textCapitalization: TextCapitalization.sentences,
@@ -223,66 +219,105 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
                     hintText: autoTitle(typeName, entry.recordedAt),
                   ),
                 ),
-                const SizedBox(height: 16),
+                const SizedBox(height: Space.lg),
                 TextField(
                   controller: _noteController,
-                  minLines: 3,
-                  maxLines: 8,
+                  minLines: 4,
+                  maxLines: 10,
                   textCapitalization: TextCapitalization.sentences,
                   decoration: const InputDecoration(
                     labelText: 'Note',
                     alignLabelWithHint: true,
                   ),
                 ),
-                const SizedBox(height: 20),
+                const SizedBox(height: Space.xl),
                 TagEditor(
                   selected: _tagNames,
                   onChanged: (tags) => setState(() => _tagNames = tags),
                 ),
               ] else ...[
-                if (type != null)
-                  Row(
-                    children: [
-                      Icon(
-                        iconForKey(type.iconKey),
-                        size: 16,
-                        color: colorForKey(type.colorKey, theme.brightness),
-                      ),
-                      const SizedBox(width: 6),
-                      Text(
-                        type.name,
-                        style: theme.textTheme.labelLarge?.copyWith(
-                          color: colorForKey(type.colorKey, theme.brightness),
-                        ),
-                      ),
-                      const SizedBox(width: 10),
-                      Icon(iconForMedium(entry.medium),
-                          size: 14, color: theme.colorScheme.onSurfaceVariant),
-                      const SizedBox(width: 4),
-                      Text(
-                        entry.medium == Medium.audio ? 'Audio' : 'Video',
-                        style: theme.textTheme.labelSmall?.copyWith(
-                          color: theme.colorScheme.onSurfaceVariant,
-                        ),
-                      ),
-                    ],
-                  ),
-                const SizedBox(height: 12),
-                Text(formatWhen(entry.recordedAt),
-                    style: theme.textTheme.bodyMedium),
+                // Type and medium as a quiet caption above the title, so the
+                // title itself gets to be the loudest thing on the page.
+                Row(
+                  children: [
+                    Container(
+                      width: 7,
+                      height: 7,
+                      decoration:
+                          BoxDecoration(color: accent, shape: BoxShape.circle),
+                    ),
+                    const SizedBox(width: Space.sm),
+                    Text(
+                      typeName.toUpperCase(),
+                      style: CairnType.eyebrow(palette).copyWith(color: accent),
+                    ),
+                    const SizedBox(width: Space.md),
+                    Icon(iconForMedium(entry.medium),
+                        size: 13, color: palette.inkTertiary),
+                    const SizedBox(width: Space.xs + 1),
+                    Text(
+                      entry.medium == Medium.audio ? 'AUDIO' : 'VIDEO',
+                      style: CairnType.eyebrow(palette),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: Space.md),
+                Text(
+                  displayTitle(entry, typeName),
+                  style: text.headlineMedium,
+                ),
+                const SizedBox(height: Space.sm),
+                Text(
+                  formatWhen(entry.recordedAt),
+                  style: text.bodySmall?.copyWith(color: palette.inkTertiary),
+                ),
                 if (entry.note != null && entry.note!.trim().isNotEmpty) ...[
-                  const SizedBox(height: 16),
-                  Text(entry.note!, style: theme.textTheme.bodyLarge),
+                  const SizedBox(height: Space.xl),
+                  Text(entry.note!, style: text.bodyLarge),
                 ],
-                const SizedBox(height: 16),
+                const SizedBox(height: Space.xl),
                 _TagList(entryId: entry.id),
               ],
-              const SizedBox(height: 24),
-              _MetadataCard(entry: entry),
+
+              const SizedBox(height: Space.xxl),
+              _Details(entry: entry),
             ],
           ),
         );
       },
+    );
+  }
+}
+
+class _Notice extends StatelessWidget {
+  const _Notice({required this.icon, required this.message});
+
+  final IconData icon;
+  final String message;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = context.palette;
+    return Container(
+      padding: const EdgeInsets.all(Space.lg),
+      decoration: BoxDecoration(
+        color: palette.dangerSoft,
+        borderRadius: BorderRadius.circular(Radii.lg),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, color: palette.onDangerSoft, size: 20),
+          const SizedBox(width: Space.md),
+          Expanded(
+            child: Text(
+              message,
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: palette.onDangerSoft,
+                  ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -303,15 +338,13 @@ class _TagList extends StatelessWidget {
         return StreamBuilder<List<TagRow>>(
           stream: db.watchTags(),
           builder: (context, tagSnapshot) {
-            final tags =
-                (tagSnapshot.data ?? const <TagRow>[]).where((t) => ids.contains(t.id));
+            final tags = (tagSnapshot.data ?? const <TagRow>[])
+                .where((t) => ids.contains(t.id));
             if (tags.isEmpty) return const SizedBox.shrink();
             return Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                for (final tag in tags) Chip(label: Text(tag.name)),
-              ],
+              spacing: Space.sm,
+              runSpacing: Space.sm,
+              children: [for (final tag in tags) Chip(label: Text(tag.name))],
             );
           },
         );
@@ -320,107 +353,117 @@ class _TagList extends StatelessWidget {
   }
 }
 
-/// The metadata block, including S8's "space saved" stat.
-class _MetadataCard extends StatelessWidget {
-  const _MetadataCard({required this.entry});
+/// Metadata, with §8's "space saved" given the prominence it earns — it is the
+/// evidence behind the app's central claim.
+class _Details extends StatelessWidget {
+  const _Details({required this.entry});
 
   final EntryRow entry;
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
+    final palette = context.palette;
+    final text = Theme.of(context).textTheme;
     final original = entry.originalSizeBytes;
     final saved = original == null ? 0 : original - entry.fileSizeBytes;
 
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('DETAILS',
-                style: theme.textTheme.labelSmall?.copyWith(
-                  letterSpacing: 1.1,
-                  color: theme.colorScheme.onSurfaceVariant,
-                )),
-            const SizedBox(height: 12),
-            _Row(label: 'Length', value: formatDuration(entry.durationMs)),
-            _Row(label: 'Size', value: formatBytes(entry.fileSizeBytes)),
-            if (saved > 0)
-              _Row(
-                label: 'Space saved',
-                value: '${formatBytes(saved)} '
-                    '(${(saved / original! * 100).round()}%)',
-                emphasise: true,
-              ),
-            if (entry.width != null && entry.height != null)
-              _Row(
-                label: 'Resolution',
-                value: '${entry.width}x${entry.height}',
-              ),
-            if (entry.codec != null)
-              _Row(
-                label: 'Codec',
-                // Spelled out: "h265" on a spec sheet means nothing to most
-                // people, and it is the field that explains a playback failure.
-                value: switch (entry.codec) {
-                  'h265' => 'HEVC (H.265)',
-                  'h264' => 'H.264',
-                  final other => other ?? '',
-                },
-              ),
-            if (entry.bitrateKbps != null)
-              _Row(label: 'Bitrate', value: '${entry.bitrateKbps} kbps'),
-            _Row(
-              label: 'Recorded',
-              value: formatDateOnly(entry.recordedAt),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (saved > 0) ...[
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(Space.lg),
+            decoration: BoxDecoration(
+              color: palette.accentSoft,
+              borderRadius: BorderRadius.circular(Radii.lg),
+              border: Border.all(color: palette.accent.withValues(alpha: 0.22)),
             ),
-            if (entry.latitude != null && entry.longitude != null)
-              _Row(
-                label: 'Location',
-                value: '${entry.latitude!.toStringAsFixed(4)}, '
-                    '${entry.longitude!.toStringAsFixed(4)}',
-              ),
-          ],
-        ),
-      ),
+            child: Row(
+              children: [
+                Icon(Icons.compress, size: 20, color: palette.accent),
+                const SizedBox(width: Space.md),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '${formatBytes(saved)} saved',
+                        style: text.titleMedium?.copyWith(color: palette.accent),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        '${formatBytes(original!)} became '
+                        '${formatBytes(entry.fileSizeBytes)} '
+                        '(${(saved / original * 100).round()}% smaller)',
+                        style: text.bodySmall
+                            ?.copyWith(color: palette.inkSecondary),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: Space.xl),
+        ],
+        Text('DETAILS', style: CairnType.eyebrow(palette)),
+        const SizedBox(height: Space.md),
+        _Row(label: 'Length', value: formatDuration(entry.durationMs)),
+        _Row(label: 'Size', value: formatBytes(entry.fileSizeBytes)),
+        if (entry.width != null && entry.height != null)
+          _Row(label: 'Resolution', value: '${entry.width}×${entry.height}'),
+        if (entry.codec != null)
+          _Row(
+            label: 'Codec',
+            // Spelled out: "h265" means nothing to most people, and it is the
+            // field that explains a playback failure.
+            value: switch (entry.codec) {
+              'h265' => 'HEVC (H.265)',
+              'h264' => 'H.264',
+              final other => other ?? '',
+            },
+          ),
+        if (entry.bitrateKbps != null)
+          _Row(label: 'Bitrate', value: '${entry.bitrateKbps} kbps'),
+        if (entry.latitude != null && entry.longitude != null)
+          _Row(
+            label: 'Location',
+            value: '${entry.latitude!.toStringAsFixed(4)}, '
+                '${entry.longitude!.toStringAsFixed(4)}',
+          ),
+      ],
     );
   }
 }
 
 class _Row extends StatelessWidget {
-  const _Row({
-    required this.label,
-    required this.value,
-    this.emphasise = false,
-  });
+  const _Row({required this.label, required this.value});
 
   final String label;
   final String value;
-  final bool emphasise;
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
+    final palette = context.palette;
+    final text = Theme.of(context).textTheme;
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
+      padding: const EdgeInsets.symmetric(vertical: Space.sm - 1),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          SizedBox(
-            width: 110,
-            child: Text(label,
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: theme.colorScheme.onSurfaceVariant,
-                )),
-          ),
           Expanded(
             child: Text(
+              label,
+              style: text.bodySmall?.copyWith(color: palette.inkTertiary),
+            ),
+          ),
+          Expanded(
+            flex: 2,
+            child: Text(
               value,
-              style: emphasise
-                  ? theme.textTheme.bodyMedium
-                      ?.copyWith(fontWeight: FontWeight.w600)
-                  : theme.textTheme.bodyMedium,
+              textAlign: TextAlign.right,
+              style: text.bodySmall?.copyWith(color: palette.ink),
             ),
           ),
         ],

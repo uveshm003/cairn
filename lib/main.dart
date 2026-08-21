@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 
 import 'app.dart';
 import 'data/database.dart';
+import 'data/demo_seed.dart';
 import 'media/media_store.dart';
 import 'media/save_pipeline.dart';
 import 'settings/app_settings.dart';
@@ -18,6 +19,14 @@ Future<void> main() async {
   final db = CairnDatabase();
   final store = await MediaStore.open();
   final settings = await AppSettings.load(db);
+
+  // Debug-only, flag-gated, and skipped unless the library is empty. Const-false
+  // in a release build, so the whole path is tree-shaken away. Re-read settings
+  // afterwards, because seeding also marks onboarding done and `settings` was
+  // loaded before it ran.
+  await seedDemoDataIfRequested(db, store);
+  final effectiveSettings =
+      seedDemoRequested ? await AppSettings.load(db) : settings;
 
   // Housekeeping on launch, not on a timer: the trash purge and the orphan
   // sweep both touch the filesystem, and doing them here means they happen
@@ -30,8 +39,8 @@ Future<void> main() async {
   runApp(CairnApp(
     db: db,
     store: store,
-    settings: settings,
-    showOnboarding: !settings.onboarded,
+    settings: effectiveSettings,
+    showOnboarding: !effectiveSettings.onboarded,
   ));
 }
 

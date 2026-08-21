@@ -13,6 +13,7 @@ import 'package:just_audio/just_audio.dart';
 import 'package:video_player/video_player.dart';
 
 import '../../data/database.dart';
+import '../theme/tokens.dart';
 import 'formatting.dart';
 
 class MediaPreview extends StatelessWidget {
@@ -50,6 +51,7 @@ class _VideoPreview extends StatefulWidget {
 class _VideoPreviewState extends State<_VideoPreview> {
   VideoPlayerController? _controller;
   String? _error;
+  String? _errorDetail;
 
   @override
   void initState() {
@@ -70,12 +72,16 @@ class _VideoPreviewState extends State<_VideoPreview> {
     } catch (e) {
       await controller.dispose();
       if (!mounted) return;
-      // S17 flags HEVC playback on old devices as a risk. A device that can
-      // *encode* HEVC but not decode it fails exactly here, so the message says
-      // so rather than showing a silent black rectangle.
-      setState(() => _error = 'This video would not open.\n'
-          'If it was encoded as HEVC, this device may not be able to play it '
-          'back. $e');
+      // §17 flags HEVC playback on old devices as a risk. A device that can
+      // *encode* HEVC but not decode it fails exactly here, so say so rather
+      // than showing a silent black rectangle. The raw platform error is kept
+      // but demoted -- it is the only diagnostic this offline app will ever
+      // produce, and it should not be the first thing the user reads.
+      setState(() {
+        _error = 'This video would not open. If it was encoded as HEVC, this '
+            'device may not be able to play it back.';
+        _errorDetail = '$e';
+      });
     }
   }
 
@@ -91,22 +97,44 @@ class _VideoPreviewState extends State<_VideoPreview> {
     final controller = _controller;
 
     if (_error != null) {
-      return AspectRatio(
-        aspectRatio: 16 / 9,
-        child: Container(
-          decoration: BoxDecoration(
-            color: theme.colorScheme.errorContainer,
-            borderRadius: BorderRadius.circular(16),
-          ),
-          padding: const EdgeInsets.all(20),
-          child: Center(
-            child: Text(
-              _error!,
-              textAlign: TextAlign.center,
-              style: theme.textTheme.bodySmall
-                  ?.copyWith(color: theme.colorScheme.onErrorContainer),
+      // Hugs its content rather than reserving a 16:9 box for a message.
+      return Container(
+        width: double.infinity,
+        decoration: BoxDecoration(
+          color: theme.colorScheme.errorContainer,
+          borderRadius: BorderRadius.circular(Radii.lg),
+        ),
+        padding: const EdgeInsets.all(Space.lg),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.play_disabled_outlined,
+                    size: 18, color: theme.colorScheme.onErrorContainer),
+                const SizedBox(width: Space.sm),
+                Expanded(
+                  child: Text(
+                    _error!,
+                    style: theme.textTheme.bodySmall
+                        ?.copyWith(color: theme.colorScheme.onErrorContainer),
+                  ),
+                ),
+              ],
             ),
-          ),
+            if (_errorDetail != null) ...[
+              const SizedBox(height: Space.sm),
+              Text(
+                _errorDetail!,
+                maxLines: 3,
+                overflow: TextOverflow.ellipsis,
+                style: theme.textTheme.labelSmall?.copyWith(
+                  color: theme.colorScheme.onErrorContainer
+                      .withValues(alpha: 0.65),
+                ),
+              ),
+            ],
+          ],
         ),
       );
     }
@@ -117,7 +145,7 @@ class _VideoPreviewState extends State<_VideoPreview> {
         child: Container(
           decoration: BoxDecoration(
             color: theme.colorScheme.surfaceContainerHighest,
-            borderRadius: BorderRadius.circular(16),
+            borderRadius: BorderRadius.circular(Radii.lg),
           ),
           child: const Center(child: CircularProgressIndicator()),
         ),
@@ -127,7 +155,7 @@ class _VideoPreviewState extends State<_VideoPreview> {
     return Column(
       children: [
         ClipRRect(
-          borderRadius: BorderRadius.circular(16),
+          borderRadius: BorderRadius.circular(Radii.lg),
           child: AspectRatio(
             aspectRatio: controller.value.aspectRatio,
             child: Stack(
@@ -227,7 +255,7 @@ class _AudioPreviewState extends State<_AudioPreview> {
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
           color: theme.colorScheme.errorContainer,
-          borderRadius: BorderRadius.circular(16),
+          borderRadius: BorderRadius.circular(Radii.lg),
         ),
         child: Text(_error!,
             style: TextStyle(color: theme.colorScheme.onErrorContainer)),
@@ -238,7 +266,7 @@ class _AudioPreviewState extends State<_AudioPreview> {
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: theme.colorScheme.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(Radii.lg),
       ),
       child: StreamBuilder<PlayerState>(
         stream: _player.playerStateStream,
