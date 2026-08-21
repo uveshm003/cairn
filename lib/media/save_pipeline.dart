@@ -157,13 +157,17 @@ class SavePipeline {
     onProgress?.call(const SaveProgress(stage: SaveStage.storing));
     final String storedPath;
     if (skipped) {
-      // Copy rather than move when the caller wants the original kept.
-      storedPath = keepOriginal
-          ? await _copyIntoStore(sourcePath)
-          : await _store.adopt(sourcePath);
+      // Nothing was encoded, so the source *is* the entry. When the user wants
+      // originals kept there is nothing separate to keep -- this file is both.
+      storedPath = await _store.adopt(sourcePath);
     } else {
       storedPath = await _store.adopt(result.outputPath);
-      if (!keepOriginal) {
+      if (keepOriginal) {
+        // The source is the camera plugin's cache path, which the OS reclaims.
+        // Leaving it there would make the setting a promise the app breaks, so
+        // it moves somewhere durable instead.
+        await _store.adopt(sourcePath, original: true);
+      } else {
         // S9: the original goes only after the output is verified and stored.
         await File(sourcePath).delete().catchError((_) => File(sourcePath));
       }
@@ -275,14 +279,6 @@ class SavePipeline {
     } on CompressException {
       return null;
     }
-  }
-
-  Future<String> _copyIntoStore(String sourcePath) async {
-    final destination = _store.newMediaPath(
-      sourcePath.contains('.') ? sourcePath.split('.').last : 'mp4',
-    );
-    await File(sourcePath).copy(destination);
-    return _store.relativize(destination);
   }
 
   Future<void> _releaseQuietly(String path) async {

@@ -18,7 +18,7 @@
         tools:node="remove" />
 
     <!-- flutter_compress starts a foreground service only when
-         keepAliveInBackground is true. Every profile in lib/spike/profiles.dart
+         keepAliveInBackground is true. Every profile in lib/domain/encoding_profile.dart
          sets it false, so these three are dead weight. If background encoding
          is ever wanted, delete these three lines first — a stripped permission
          does not crash the encode, it silently loses background protection,
@@ -29,6 +29,12 @@
         tools:node="remove" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"
         tools:node="remove" />
+
+    <!-- Location is opt-in and off by default (S5). Declared coarse-only: an
+         entry wants "roughly where", not lane-level accuracy, and asking for
+         FINE would be a bigger claim than the feature makes. Cairn never sends
+         it anywhere; it is stored in the local database like everything else. -->
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
 
     <!-- Media stays in the app's private documents dir (S9), never the shared
          gallery, so the legacy external-storage permissions are not needed.

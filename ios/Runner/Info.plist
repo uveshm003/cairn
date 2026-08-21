@@ -72,5 +72,7 @@
 	<string>Cairn records audio for your entries. Nothing is uploaded.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Pick an existing clip to test compression against. Cairn never writes to your photo library.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Cairn can tag an entry with roughly where you recorded it. This is off by default and never leaves your device.</string>
 </dict>
 </plist>

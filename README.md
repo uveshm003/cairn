@@ -15,10 +15,10 @@ onboarding persists.
 | | |
 |---|---|
 | `flutter analyze` | clean |
-| `flutter test` | 72 passing |
-| `flutter test integration_test/ -d <device>` | 6 passing, on-device |
-| `flutter build apk --release` | builds |
-| `flutter build ios --no-codesign` | builds |
+| `flutter test` | 84 passing |
+| `flutter test integration_test/ -d <device>` | 6 passing, on a Pixel 7 Pro |
+| `flutter build apk --release` | builds (65.2 MB) |
+| `flutter build ios --release --no-codesign` | builds (23.0 MB) |
 
 **Not yet exercised on hardware: recording itself.** See *What is unverified*.
 
@@ -30,8 +30,9 @@ dart run build_runner build      # Drift codegen -> lib/data/database.g.dart
 flutter run
 ```
 
-Codegen is required — `lib/data/database.g.dart` is generated and not committed
-in a usable state without it.
+`lib/data/database.g.dart` is generated but **is** committed, so a plain
+`flutter run` works without codegen. Re-run `build_runner` after any change to
+the schema in `lib/data/database.dart`.
 
 ## Layout
 
@@ -86,6 +87,14 @@ its at capture time from `record`. This is forced, not stylistic:
 Android's Media3 exposes neither and ignores them silently. So §8's audio ladder
 (32–48 / 96 / 128 kbps) cannot be applied after the fact on Android at all.
 
+### Kept originals go somewhere durable
+
+`keepOriginals` (§8's opt-in, off by default) moves the uncompressed source into
+an `originals/` directory rather than leaving it at the camera plugin's cache
+path, which the OS reclaims. Nothing in the database references those files, so
+`originals/` is deliberately excluded from the orphan sweep — a sweep that saw
+them would delete exactly the files the setting exists to preserve.
+
 ### Corrections to requirements.md
 
 1. **§2's "a 30s clip can be 300–500 MB" is arithmetically impossible.** It
@@ -116,6 +125,13 @@ Android's Media3 exposes neither and ignores them silently. So §8's audio ladde
 - `sqlite3` 3.x fetches a prebuilt library at build time. If that download fails
   behind a TLS-inspecting proxy, `hooks: user_defines:` in `pubspec.yaml` can
   point it at a system or source build.
+- The release manifest ships exactly four permissions: `CAMERA`,
+  `RECORD_AUDIO`, `READ_EXTERNAL_STORAGE`, and `ACCESS_COARSE_LOCATION` (the
+  last only because the opt-in location feature needs it declared; nothing
+  requests it until the user turns the setting on).
+- **Watch for `--` in AndroidManifest comments.** A double hyphen inside an XML
+  comment is illegal and fails `processReleaseMainManifest` with an opaque
+  "Error parsing" — which only shows up in a release build.
 - `READ_EXTERNAL_STORAGE` comes from `image_picker`, used only by the
   Compression Lab's gallery-pick path. Don't strip it while §2's baseline claim
   is still open — that path is the only way to measure it.
@@ -138,9 +154,12 @@ Being explicit, because a green test suite is not the same as a working feature:
   black rectangle.
 - **Export's share sheet** has not been driven end to end, though the archive
   itself is round-trip tested (14 tests).
+- **Location capture** is wired (opt-in, off by default, coarse accuracy, 6s
+  timeout, saves without coordinates on any failure) but has not been exercised
+  on hardware.
 
 ## Not built (deliberately)
 
-Per §4, these are v1.x or later: custom entry types, favourites-as-collections,
-in-app trim, quick-record widget, and on-device transcription (§15). Favourites,
-trash, and export/import *are* in.
+Per §4, these are v1.x or later: custom entry types, collections/folders,
+in-app trim, quick-record widget, and on-device transcription (§15).
+Favourites, trash, export/import, and opt-in location *are* in.

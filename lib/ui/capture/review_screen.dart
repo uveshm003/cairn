@@ -16,6 +16,7 @@ import '../../app.dart';
 import '../../data/database.dart';
 import '../../domain/encoding_profile.dart';
 import '../../media/save_pipeline.dart';
+import '../../services/location_service.dart';
 import '../widgets/formatting.dart';
 import '../widgets/media_preview.dart';
 import '../widgets/tag_editor.dart';
@@ -103,6 +104,13 @@ class _ReviewScreenState extends State<ReviewScreen> {
         tagIds.add(tag.id);
       }
 
+      // Only asks for a fix -- and only asks for the permission -- when the
+      // user has turned location on (S5: off by default). A null result is
+      // normal and saves without coordinates.
+      final coordinates = await LocationService.tryFix(
+        enabled: scope.settings.locationEnabled.value,
+      );
+
       final now = DateTime.now();
       final title = _titleController.text.trim();
       final note = _noteController.text.trim();
@@ -128,6 +136,8 @@ class _ReviewScreenState extends State<ReviewScreen> {
           height: Value(media.height),
           codec: Value(media.codec),
           bitrateKbps: Value(media.bitrateKbps),
+          latitude: Value(coordinates?.latitude),
+          longitude: Value(coordinates?.longitude),
         ),
         tagIds: tagIds,
       );

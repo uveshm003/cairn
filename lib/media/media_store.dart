@@ -45,6 +45,14 @@ class MediaStore {
   /// Sub-directory holding generated video thumbnails.
   static const thumbDirName = 'thumbs';
 
+  /// Sub-directory holding uncompressed originals, when the user has asked to
+  /// keep them (S8 offers this as an opt-in, off by default).
+  ///
+  /// Deliberately outside [listAllFiles]: nothing in the database references
+  /// these, so an orphan sweep that saw them would delete the very files the
+  /// setting exists to preserve.
+  static const originalsDirName = 'originals';
+
   final Directory _documentsDir;
 
   static MediaStore? _instance;
@@ -54,7 +62,7 @@ class MediaStore {
     final existing = _instance;
     if (existing != null) return existing;
     final docs = await getApplicationDocumentsDirectory();
-    for (final name in [mediaDirName, thumbDirName]) {
+    for (final name in [mediaDirName, thumbDirName, originalsDirName]) {
       await Directory(p.join(docs.path, name)).create(recursive: true);
     }
     return _instance = MediaStore._(docs);
@@ -62,7 +70,7 @@ class MediaStore {
 
   /// Test seam: point the store at a temporary directory.
   static MediaStore forTesting(Directory documentsDir) {
-    for (final name in [mediaDirName, thumbDirName]) {
+    for (final name in [mediaDirName, thumbDirName, originalsDirName]) {
       Directory(p.join(documentsDir.path, name)).createSync(recursive: true);
     }
     return MediaStore._(documentsDir);
@@ -93,9 +101,15 @@ class MediaStore {
   ///
   /// Falls back to copy-then-delete when a rename would cross filesystems,
   /// which is the normal case for a plugin cache directory on Android.
-  Future<String> adopt(String sourcePath, {bool thumbnail = false}) async {
+  Future<String> adopt(
+    String sourcePath, {
+    bool thumbnail = false,
+    bool original = false,
+  }) async {
     final ext = p.extension(sourcePath);
-    final dir = thumbnail ? thumbDirName : mediaDirName;
+    final dir = original
+        ? originalsDirName
+        : (thumbnail ? thumbDirName : mediaDirName);
     final destination =
         p.join(_documentsDir.path, dir, '${_uuid.v4()}$ext');
     final source = File(sourcePath);
@@ -133,9 +147,21 @@ class MediaStore {
     return out;
   }
 
+  /// Bytes held by kept originals, so storage usage can report them separately
+  /// rather than making the app look larger than its entries explain.
+  int originalsBytesOnDisk() {
+    final dir = Directory(p.join(_documentsDir.path, originalsDirName));
+    if (!dir.existsSync()) return 0;
+    var total = 0;
+    for (final entity in dir.listSync()) {
+      if (entity is File) total += entity.lengthSync();
+    }
+    return total;
+  }
+
   int totalBytesOnDisk() {
     var total = 0;
-    for (final name in [mediaDirName, thumbDirName]) {
+    for (final name in [mediaDirName, thumbDirName, originalsDirName]) {
       final dir = Directory(p.join(_documentsDir.path, name));
       if (!dir.existsSync()) continue;
       for (final entity in dir.listSync()) {
