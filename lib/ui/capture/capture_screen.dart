@@ -72,20 +72,39 @@ class _CaptureScreenState extends State<CaptureScreen>
 
   bool get _nearLimit => _elapsed.inMilliseconds > _maxMs - 10000;
 
+  /// The overlay style to put back on the way out.
+  ///
+  /// Captured from the theme while the context is still valid, because dispose()
+  /// must not read inherited widgets — and because a hardcoded value is wrong
+  /// half the time. The library screen uses a custom header rather than an
+  /// AppBar, so Material's automatic overlay handling does not restore this.
+  SystemUiOverlayStyle? _restoreOverlayStyle;
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    // Light status-bar glyphs, because the chrome is dark regardless of theme.
+    // Light *glyphs*, because this screen's chrome is dark in either theme.
     SystemChrome.setSystemUIOverlayStyle(SystemUiOverlayStyle.light);
     if (_type.allowedMedium == AllowedMedium.audioOnly) _medium = Medium.audio;
     _prepare();
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Dark canvas wants light glyphs, and vice versa.
+    _restoreOverlayStyle = context.palette.isDark
+        ? SystemUiOverlayStyle.light
+        : SystemUiOverlayStyle.dark;
+  }
+
+  @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    SystemChrome.setSystemUIOverlayStyle(SystemUiOverlayStyle.dark);
+    SystemChrome.setSystemUIOverlayStyle(
+      _restoreOverlayStyle ?? SystemUiOverlayStyle.dark,
+    );
     _ticker?.cancel();
     _amplitudeSub?.cancel();
     _camera?.dispose();
@@ -714,22 +733,27 @@ class _TimeReadout extends StatelessWidget {
             ),
           ),
         ),
-        // §6 asks for a warning near the limit, not just a silent cut. Rendered
-        // in a slot that is always present so nothing shifts when it appears.
-        SizedBox(
-          height: 26,
-          child: Center(
-            child: AnimatedOpacity(
-              opacity: warn ? 1 : 0,
-              duration: Motion.fast,
-              child: Text(
-                'Stopping in ${(remainingMs / 1000).ceil()}s',
-                style: TextStyle(
-                  fontFamily: CairnType.body,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w500,
-                  color: record,
-                ),
+        // §6 asks for a warning near the limit, not just a silent cut.
+        //
+        // Always laid out and merely faded, so the record button never shifts
+        // when it appears — but *not* inside a fixed-height box, which would
+        // clip the warning at a large text scale and hide it from exactly the
+        // users who most need it.
+        Padding(
+          padding: const EdgeInsets.only(top: Space.sm),
+          child: AnimatedOpacity(
+            opacity: warn ? 1 : 0,
+            duration: Motion.fast,
+            child: Text(
+              // Always the real string: it is invisible at zero opacity, and a
+              // single line is the same height whatever it says, so the button
+              // below never moves.
+              'Stopping in ${(remainingMs / 1000).clamp(0, 9999).ceil()}s',
+              style: TextStyle(
+                fontFamily: CairnType.body,
+                fontSize: 12,
+                fontWeight: FontWeight.w500,
+                color: record,
               ),
             ),
           ),
