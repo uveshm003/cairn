@@ -19,6 +19,7 @@ import 'package:record/record.dart';
 
 import '../../app.dart';
 import '../../data/database.dart';
+import '../../domain/amplitude_envelope.dart';
 import '../../domain/camera_choice.dart';
 import '../../domain/encoding_profile.dart';
 import '../theme/cairn_theme.dart';
@@ -34,17 +35,36 @@ const _chromeText = Color(0xFFF4F2EE);
 const _chromeMuted = Color(0xFF9A968F);
 
 class CaptureScreen extends StatefulWidget {
-  const CaptureScreen({super.key, required this.initialType});
+  const CaptureScreen({
+    super.key,
+    required this.initialType,
+    this.initialMedium,
+  });
 
   final EntryTypeRow initialType;
+
+  /// Which medium to open on. Null means "use the remembered one", which is
+  /// what the in-app path wants; the home-screen widget passes an explicit
+  /// medium because its two buttons are the whole point of it.
+  final Medium? initialMedium;
 
   @override
   State<CaptureScreen> createState() => _CaptureScreenState();
 }
 
+/// Upper bound on markers per entry.
+///
+/// Not a product limit anyone will reach deliberately -- it is there so a stuck
+/// finger or a pocket tap cannot write thousands of rows against one recording.
+const _maxMarkers = 200;
+
 class _CaptureScreenState extends State<CaptureScreen>
     with WidgetsBindingObserver {
   late EntryTypeRow _type = widget.initialType;
+
+  /// Resolved in `didChangeDependencies`, which is the first legal moment to
+  /// read the remembered medium out of AppScope -- the same constraint that
+  /// keeps `_prepare()` out of `initState`.
   Medium _medium = Medium.video;
 
   CameraController? _camera;
@@ -75,6 +95,17 @@ class _CaptureScreenState extends State<CaptureScreen>
 
   String? _pendingPath;
 
+  /// Marker offsets in milliseconds, timed off [_stopwatch] while recording.
+  ///
+  /// Held here rather than written straight through, because the offsets are
+  /// only safe once the *stored* file's duration is known -- see
+  /// `normalizeMarkers`.
+  final List<int> _markers = [];
+
+  /// Collects the amplitude envelope for waveform scrubbing. Audio only: the
+  /// camera plugin reports no levels, so a video entry has no envelope.
+  EnvelopeRecorder? _envelope;
+
   int get _maxMs {
     // The type's cap, never above the global ceiling (§6).
     final hardCap = AppScope.of(context).settings.hardCapMs.value;
@@ -100,13 +131,29 @@ class _CaptureScreenState extends State<CaptureScreen>
     WidgetsBinding.instance.addObserver(this);
     // Light *glyphs*, because this screen's chrome is dark in either theme.
     SystemChrome.setSystemUIOverlayStyle(SystemUiOverlayStyle.light);
-    if (_type.allowedMedium == AllowedMedium.audioOnly) _medium = Medium.audio;
-    // NB: _prepare() is deliberately *not* called here. It reads the remembered
-    // lens from AppScope, and touching an inherited widget before initState
-    // returns throws.
+    // NB: _prepare() is deliberately *not* called here, and neither is the
+    // remembered-medium read. Both touch AppScope, and reading an inherited
+    // widget before initState returns throws.
   }
 
   bool _prepared = false;
+
+  /// Which medium to open on, in priority order: an explicit request from the
+  /// home-screen widget, then the type's own constraint, then the remembered
+  /// choice.
+  ///
+  /// The type outranks the remembered medium because a video-only type simply
+  /// cannot honour it (S6), and it outranks nothing else -- a widget tap on
+  /// "Audio" against a video-only type still has to land somewhere legal.
+  Medium _resolveInitialMedium() {
+    final requested = widget.initialMedium ??
+        AppScope.of(context).settings.preferredMedium.value;
+    return switch (_type.allowedMedium) {
+      AllowedMedium.audioOnly => Medium.audio,
+      AllowedMedium.videoOnly => Medium.video,
+      AllowedMedium.both => requested,
+    };
+  }
 
   @override
   void didChangeDependencies() {
@@ -120,6 +167,7 @@ class _CaptureScreenState extends State<CaptureScreen>
     // actually starts up.
     if (!_prepared) {
       _prepared = true;
+      _medium = _resolveInitialMedium();
       _prepare();
     }
   }
@@ -272,6 +320,10 @@ class _CaptureScreenState extends State<CaptureScreen>
     if (_recording || medium == _medium) return;
     setState(() => _medium = medium);
 
+    // Remembered, so the next capture -- and the quick-settings tile -- opens
+    // where the user left off. Fire-and-forget, like every other setting write.
+    AppScope.of(context).settings.setPreferredMedium(medium);
+
     // A video-only type cannot hold an audio entry, so move to one that can
     // rather than recording something that will fail validation.
     if (!typeAllowsMedium(_type, medium)) {
@@ -288,6 +340,12 @@ class _CaptureScreenState extends State<CaptureScreen>
   Future<void> _start() async {
     if (_recording) return;
     final scope = AppScope.of(context);
+
+    // Cleared unconditionally, before the medium branch. Two paths out of
+    // `_stop()` return early without clearing it -- the "too short" mis-tap and
+    // a failure to finalize -- so an abandoned audio take could otherwise hand
+    // its samples to the *next* recording, including a video one.
+    _envelope = null;
 
     try {
       if (_medium == Medium.video) {
@@ -311,12 +369,17 @@ class _CaptureScreenState extends State<CaptureScreen>
         // audioBitrateKbps on iOS only, so capture time is the only place §8's
         // audio ladder can be applied on both platforms.
         await _audio.start(profile.audioConfig, path: path);
+        _envelope = EnvelopeRecorder();
         _amplitudeSub = _audio
             .onAmplitudeChanged(const Duration(milliseconds: 90))
             .listen((amp) {
           if (!mounted) return;
           // dBFS, roughly -60..0, mapped to 0..1 for the meter.
-          setState(() => _level = ((amp.current + 50) / 50).clamp(0.0, 1.0));
+          final level = ((amp.current + 50) / 50).clamp(0.0, 1.0);
+          // The same sample feeds the meter and the stored envelope, so what
+          // the user watched while recording is what they scrub later.
+          _envelope?.add(level);
+          setState(() => _level = level);
         });
       }
     } catch (e) {
@@ -326,6 +389,9 @@ class _CaptureScreenState extends State<CaptureScreen>
 
     HapticFeedback.mediumImpact();
     _stopwatch = Stopwatch()..start();
+    // Cleared here rather than after a save, so a discarded take cannot leave
+    // its markers on the next one.
+    _markers.clear();
     setState(() => _recording = true);
 
     _ticker = Timer.periodic(const Duration(milliseconds: 100), (_) {
@@ -334,6 +400,23 @@ class _CaptureScreenState extends State<CaptureScreen>
       // §6: auto-stop at the limit rather than letting it run over.
       if (_elapsed.inMilliseconds >= _maxMs) _stop();
     });
+  }
+
+  /// Drops a marker at the current position. One tap, no typing -- naming one
+  /// would mean a keyboard over the viewfinder mid-take, which is the opposite
+  /// of what this is for.
+  void _mark() {
+    if (!_recording) return;
+    final at = _stopwatch?.elapsed;
+    if (at == null) return;
+
+    // Capped so a stuck finger cannot write thousands of rows for one entry.
+    if (_markers.length >= _maxMarkers) return;
+
+    // Selection-level feedback: distinct from the heavier impact that starting
+    // and stopping use, so the hand can tell them apart without looking.
+    HapticFeedback.selectionClick();
+    setState(() => _markers.add(at.inMilliseconds));
   }
 
   EncodingProfile _profile(AppScope scope) {
@@ -386,6 +469,8 @@ class _CaptureScreenState extends State<CaptureScreen>
           medium: _medium,
           type: _type,
           durationMs: duration.inMilliseconds,
+          markerOffsetsMs: List.of(_markers),
+          amplitudeEnvelope: _envelope?.build(),
         ),
       ),
     );
@@ -397,6 +482,7 @@ class _CaptureScreenState extends State<CaptureScreen>
       setState(() {
         _elapsed = Duration.zero;
         _pendingPath = null;
+        _envelope = null;
       });
     }
   }
@@ -578,10 +664,33 @@ class _CaptureScreenState extends State<CaptureScreen>
             remainingMs: remaining,
           ),
           const SizedBox(height: Space.lg),
-          RecordButton(
-            recording: _recording,
-            enabled: canRecord,
-            onTap: _recording ? _stop : _start,
+          // The mark button sits beside the record button rather than above it,
+          // so the thumb reaches both without moving -- markers are dropped
+          // one-handed, mid-take, while watching the subject and not the phone.
+          Row(
+            children: [
+              Expanded(
+                child: Align(
+                  alignment: Alignment.centerRight,
+                  child: _FadeSlot(
+                    visible: _recording,
+                    child: _MarkButton(
+                      count: _markers.length,
+                      enabled: _markers.length < _maxMarkers,
+                      onTap: _mark,
+                    ),
+                  ),
+                ),
+              ),
+              RecordButton(
+                recording: _recording,
+                enabled: canRecord,
+                onTap: _recording ? _stop : _start,
+              ),
+              // Balances the row so the record button stays centred whether or
+              // not the mark button is showing.
+              const Expanded(child: SizedBox.shrink()),
+            ],
           ),
         ],
       ),
@@ -685,6 +794,85 @@ class _TypePill extends StatelessWidget {
                 ),
                 const SizedBox(width: Space.xs),
                 const Icon(Icons.expand_more, size: 16, color: _chromeMuted),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// The in-recording marker button.
+///
+/// Styled as viewfinder chrome (translucent white over the scrim) rather than
+/// as an accented action, because it competes with the record button for
+/// attention and must lose that competition.
+class _MarkButton extends StatelessWidget {
+  const _MarkButton({
+    required this.count,
+    required this.enabled,
+    required this.onTap,
+  });
+
+  final int count;
+  final bool enabled;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      button: true,
+      enabled: enabled,
+      // S14 asks for labels on the recording controls. The count is spoken too,
+      // because it is the only confirmation a screen-reader user gets that the
+      // tap landed.
+      label: count == 0
+          ? 'Add marker'
+          : 'Add marker, $count so far',
+      // Excluded like _SpeedButton's: the count is already in the label above,
+      // and without this the inner Text contributes a second node so the number
+      // is read out twice.
+      excludeSemantics: true,
+      child: GestureDetector(
+        onTap: enabled ? onTap : null,
+        behavior: HitTestBehavior.opaque,
+        child: Padding(
+          // Padding rather than a larger box: keeps the visible pill small
+          // while giving the thumb a target it can hit without aiming.
+          padding: const EdgeInsets.all(Space.sm),
+          child: AnimatedContainer(
+            duration: Motion.fast,
+            padding: const EdgeInsets.symmetric(
+              horizontal: Space.md,
+              vertical: Space.sm,
+            ),
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: enabled ? 0.14 : 0.06),
+              borderRadius: BorderRadius.circular(Radii.pill),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  Icons.bookmark_add_outlined,
+                  size: 17,
+                  color: enabled ? _chromeText : _chromeMuted,
+                ),
+                // The count appears only once there is one, so the button stays
+                // quiet on a take with no markers.
+                if (count > 0) ...[
+                  const SizedBox(width: Space.xs + 2),
+                  Text(
+                    '$count',
+                    style: TextStyle(
+                      color: enabled ? _chromeText : _chromeMuted,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      fontFeatures: const [FontFeature.tabularFigures()],
+                    ),
+                  ),
+                ],
               ],
             ),
           ),

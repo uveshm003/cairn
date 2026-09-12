@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 2x1 by default. `updatePeriodMillis` is 0 deliberately: the widget shows no
+     data, so waking the app to redraw two static buttons would burn battery for
+     nothing. -->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:minWidth="180dp"
+    android:minHeight="80dp"
+    android:targetCellWidth="3"
+    android:targetCellHeight="1"
+    android:description="@string/widget_description"
+    android:previewLayout="@layout/quick_record_widget"
+    android:resizeMode="horizontal"
+    android:updatePeriodMillis="0"
+    android:widgetCategory="home_screen" />

@@ -31,6 +31,7 @@ class AppSettings {
   static const _kGridView = 'gridView';
   static const _kProfileOverride = 'profileOverride';
   static const _kPreferredLens = 'preferredLens';
+  static const _kPreferredMedium = 'preferredMedium';
 
   /// S6: a hard ceiling across all types, to protect storage and encode time.
   static const defaultHardCapMs = 30 * 60 * 1000;
@@ -63,6 +64,15 @@ class AppSettings {
   /// capture. Defaults to back: of the jobs in §3, more of them point away from
   /// you (practice, how-to, milestones) than at you.
   final preferredLens = ValueNotifier(CameraLensDirection.back);
+
+  /// Which medium capture opens on. Remembered for the same reason the lens is:
+  /// someone who keeps an audio diary should not switch away from video every
+  /// single time. It is also what the quick-settings tile means by "record" --
+  /// the tile has room for one action, so it uses the user's own last choice
+  /// rather than picking for them.
+  ///
+  /// Defaults to video, which is what capture opened on before this existed.
+  final preferredMedium = ValueNotifier(Medium.video);
 
   final entriesSinceBackup = ValueNotifier(0);
   final lastBackupAt = ValueNotifier<DateTime?>(null);
@@ -115,6 +125,12 @@ class AppSettings {
     preferredLens.value =
         LensLabel.fromStorage(await get(_kPreferredLens)) ??
             CameraLensDirection.back;
+
+    preferredMedium.value = switch (await get(_kPreferredMedium)) {
+      'audio' => Medium.audio,
+      'video' => Medium.video,
+      _ => Medium.video,
+    };
 
     final storedFilter = await get(_kLastFilter);
     if (storedFilter != null) {
@@ -178,6 +194,11 @@ class AppSettings {
   Future<void> setPreferredLens(CameraLensDirection lens) async {
     preferredLens.value = lens;
     await _db.setSetting(_kPreferredLens, lens.storageKey);
+  }
+
+  Future<void> setPreferredMedium(Medium medium) async {
+    preferredMedium.value = medium;
+    await _db.setSetting(_kPreferredMedium, medium.name);
   }
 
   Future<void> saveFilter(EntryFilter filter) async {

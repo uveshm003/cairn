@@ -114,6 +114,62 @@ void main() {
     });
   });
 
+  group('quick capture', () {
+    test('the widget and tile add no permission request', () {
+      // The README states the release build ships exactly four permissions, and
+      // that claim is public. A widget needs none; the tile's
+      // BIND_QUICK_SETTINGS_TILE is signature-level and declared *on the
+      // service* (it constrains who may bind to it) rather than requested by
+      // the app -- so it must never appear as a uses-permission.
+      expect(isDeclared('BIND_QUICK_SETTINGS_TILE'), isFalse,
+          reason: 'a signature-level bind permission must not be requested');
+      expect(
+        manifest.contains('android:permission="android.permission.'
+            'BIND_QUICK_SETTINGS_TILE"'),
+        isTrue,
+        reason: 'without it, any app could bind the tile service',
+      );
+    });
+
+    test('exactly the expected permissions are requested', () {
+      // Pinned as a set rather than individually: the failure mode worth
+      // catching is a *new* permission appearing, which no per-permission
+      // assertion would notice.
+      final declared = RegExp(
+        r'<uses-permission\s+android:name="android\.permission\.([A-Z_]+)"'
+        r'\s*/>',
+      ).allMatches(manifest).map((m) => m.group(1)!).toSet();
+
+      expect(
+        declared,
+        {'ACCESS_COARSE_LOCATION'},
+        reason: 'the only permission this manifest *adds* is coarse location; '
+            'READ_EXTERNAL_STORAGE and CAMERA/RECORD_AUDIO arrive from '
+            'plugins. A new name here changes what the store listing shows.',
+      );
+    });
+
+    test('the tile service is exported, and the widget receiver is not', () {
+      // The tile must be bindable by SystemUI, so it has to be exported. The
+      // widget receiver is reached through the AppWidget framework and needs
+      // no external entry point -- exporting it would be a needless surface.
+      expect(
+        manifest.contains(RegExp(
+          r'<receiver\s+android:name="\.QuickRecordWidget"\s+'
+          r'android:exported="false"',
+        )),
+        isTrue,
+      );
+      expect(
+        manifest.contains(RegExp(
+          r'<service\s+android:name="\.QuickRecordTileService"\s+'
+          r'android:exported="true"',
+        )),
+        isTrue,
+      );
+    });
+  });
+
   group('XML validity', () {
     test('no comment contains a double hyphen', () {
       // `--` inside an XML comment is illegal and fails

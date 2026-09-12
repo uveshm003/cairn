@@ -17,6 +17,7 @@ library;
 
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:archive/archive_io.dart';
 import 'package:drift/drift.dart' show Value;
@@ -25,12 +26,13 @@ import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../data/database.dart';
+import '../domain/recording_markers.dart';
 import '../media/media_store.dart';
 
 /// Bump when the manifest shape changes. Readers refuse anything newer than
 /// they understand rather than guessing (S11: "keep the manifest schema
 /// versioned from v1 so future formats can migrate").
-const manifestVersion = 1;
+const manifestVersion = 2;
 
 const manifestFileName = 'manifest.json';
 
@@ -125,6 +127,13 @@ class BackupService {
       'entryTypes': types.map(_typeToJson).toList(),
       'tags': tags.map(_tagToJson).toList(),
       'entries': entries.map(_entryToJson).toList(),
+      // Flat and keyed by entry id, mirroring how entryTags is stored -- the
+      // restore path already knows how to remap ids in that shape.
+      'markers': [
+        for (final entry in entries)
+          for (final marker in await _db.markersFor(entry.id))
+            {'entryId': entry.id, 'offsetMs': marker.offsetMs},
+      ],
       'entryTags': entryTagPairs,
     };
 
@@ -295,6 +304,19 @@ class BackupService {
           .add(json['tagId'] as int);
     }
 
+    // v1 archives have no `markers` key at all, so this is simply empty for
+    // them -- an older backup restores as an entry with no markers rather than
+    // failing to restore.
+    final markersByOldEntryId = <int, List<int>>{};
+    for (final raw in (manifest['markers'] as List? ?? const [])) {
+      final json = raw as Map<String, dynamic>;
+      final entryId = json['entryId'];
+      final offset = json['offsetMs'];
+      if (entryId is int && offset is int) {
+        markersByOldEntryId.putIfAbsent(entryId, () => []).add(offset);
+      }
+    }
+
     // Existing media filenames, which is how "already imported" is detected.
     final existingKeys = {
       for (final e in await _db.allEntriesIncludingTrash())
@@ -365,11 +387,21 @@ class BackupService {
           isFavorite: Value(json['isFavorite'] as bool? ?? false),
           isDeleted: Value(json['isDeleted'] as bool? ?? false),
           deletedAt: Value(_date(json['deletedAt'])),
+          amplitudeEnvelope: Value(_envelope(json['amplitudeEnvelope'])),
         ),
         tagIds: (tagsByOldEntryId[json['id'] as int] ?? const [])
             .map((oldId) => tagIdByOldId[oldId])
             .whereType<int>()
             .toList(),
+        // Re-normalized against the duration the archive records for the
+        // entry. The offsets were already clamped when they were written, but
+        // re-checking costs nothing and an archive is an untrusted input like
+        // any other file the user hands us -- a hand-edited manifest must not
+        // be able to plant a marker past the end of the file.
+        markerOffsetsMs: normalizeMarkers(
+          markersByOldEntryId[json['id'] as int] ?? const [],
+          durationMs: json['durationMs'] as int? ?? 0,
+        ),
       );
       existingKeys.add(key);
       imported++;
@@ -442,6 +474,11 @@ class BackupService {
         'isFavorite': e.isFavorite,
         'isDeleted': e.isDeleted,
         'deletedAt': e.deletedAt?.toIso8601String(),
+        // base64 because the manifest is JSON. Absent rather than null for the
+        // common case (video, and pre-v2 audio), so a v2 archive of a library
+        // with no waveforms is byte-for-byte as small as a v1 one was.
+        if (e.amplitudeEnvelope != null)
+          'amplitudeEnvelope': base64Encode(e.amplitudeEnvelope!),
       };
 
   Map<String, dynamic> _typeToJson(EntryTypeRow t) => {
@@ -461,6 +498,21 @@ class BackupService {
         'name': t.name,
         'colorKey': t.colorKey,
       };
+
+  /// Decodes a base64 envelope, tolerating anything that is not one.
+  ///
+  /// A corrupt envelope must not cost the user the entry: the waveform is a
+  /// convenience, so a bad value degrades to the plain slider rather than
+  /// failing the import.
+  static Uint8List? _envelope(Object? raw) {
+    if (raw is! String || raw.isEmpty) return null;
+    try {
+      final bytes = base64Decode(raw);
+      return bytes.isEmpty ? null : bytes;
+    } on FormatException {
+      return null;
+    }
+  }
 
   static T? _enumByName<T extends Enum>(List<T> values, Object? name) {
     if (name is! String) return null;

@@ -14,19 +14,27 @@ import '../../data/database.dart';
 import '../widgets/formatting.dart';
 import 'capture_screen.dart';
 
-Future<void> startCapture(BuildContext context) async {
+Future<void> startCapture(BuildContext context, {Medium? medium}) async {
   final scope = AppScope.of(context);
   final types = await scope.db.allTypes();
   if (types.isEmpty || !context.mounted) return;
 
   final preferredId = scope.settings.defaultTypeId.value;
-  final type = types.firstWhere(
+  var type = types.firstWhere(
     (t) => t.id == preferredId,
     orElse: () => types.first,
   );
 
+  type = reconcileTypeWithMedium(
+    preferred: type,
+    medium: medium,
+    available: types,
+  );
+
   await Navigator.of(context).push(
-    MaterialPageRoute(builder: (_) => CaptureScreen(initialType: type)),
+    MaterialPageRoute(
+      builder: (_) => CaptureScreen(initialType: type, initialMedium: medium),
+    ),
   );
 }
 
@@ -42,6 +50,9 @@ Future<EntryTypeRow?> showTypePicker(
 
   return showModalBottomSheet<EntryTypeRow>(
     context: context,
+    // Without this the sheet is capped at 9/16 of the screen, which the five
+    // types already overflow at large text scales.
+    isScrollControlled: true,
     useSafeArea: true,
     builder: (context) {
       final theme = Theme.of(context);
@@ -59,21 +70,58 @@ Future<EntryTypeRow?> showTypePicker(
                 ],
               ),
             ),
-            for (final type in types)
-              _TypeOption(
-                type: type,
-                selected: type.id == current.id,
-                // A video-only type cannot take an audio recording (S6), so it
-                // is shown greyed rather than hidden -- hiding it would leave
-                // the user wondering where How-to went.
-                enabled: forMedium == null || _allows(type, forMedium),
-                onTap: () => Navigator.of(context).pop(type),
+            // Flexible, not Expanded: with room to spare the sheet still hugs
+            // the list, and only starts scrolling when it would not fit.
+            Flexible(
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    for (final type in types)
+                      _TypeOption(
+                        type: type,
+                        selected: type.id == current.id,
+                        // A video-only type cannot take an audio recording
+                        // (S6), so it is shown greyed rather than hidden --
+                        // hiding it would leave the user wondering where
+                        // How-to went.
+                        enabled: forMedium == null || _allows(type, forMedium),
+                        onTap: () => Navigator.of(context).pop(type),
+                      ),
+                  ],
+                ),
               ),
+            ),
             const SizedBox(height: 12),
           ],
         ),
       );
     },
+  );
+}
+
+/// Picks the type to open capture on when a medium has been demanded.
+///
+/// The home-screen widget's two buttons name a medium outright, and that can
+/// collide with the remembered default type: tapping "Audio" while How-to is the
+/// default asks for an audio entry of a video-only type (S6). Honouring the tap
+/// means moving to a type that accepts the medium -- opening on video instead
+/// would silently do something the user did not press.
+///
+/// With no medium demanded (the in-app FAB, and the quick-settings tile) the
+/// preferred type is returned untouched.
+EntryTypeRow reconcileTypeWithMedium({
+  required EntryTypeRow preferred,
+  required Medium? medium,
+  required List<EntryTypeRow> available,
+}) {
+  if (medium == null || _allows(preferred, medium)) return preferred;
+  return available.firstWhere(
+    (t) => _allows(t, medium),
+    // No type accepts it at all: keep the preferred one. The capture screen
+    // coerces the medium to something the type allows, so this still lands
+    // somewhere legal rather than nowhere.
+    orElse: () => preferred,
   );
 }
 

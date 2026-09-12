@@ -15,6 +15,7 @@ import '../../data/database.dart';
 import '../theme/cairn_theme.dart';
 import '../theme/tokens.dart';
 import '../widgets/formatting.dart';
+import '../widgets/marker_review.dart';
 import '../widgets/media_preview.dart';
 import '../widgets/tag_editor.dart';
 
@@ -32,6 +33,40 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
   final _titleController = TextEditingController();
   final _noteController = TextEditingController();
   List<String> _tagNames = [];
+
+  /// Held here, not built in `build()`.
+  ///
+  /// `watchEntry` and `watchMarkers` hand back a *new* Stream on every call, so
+  /// creating them inline made every `setState` on this screen -- entering edit
+  /// mode, typing a tag -- tear down both subscriptions and re-run both queries.
+  /// `StreamBuilder` keeps its snapshot data across a resubscribe, so nothing
+  /// flickered; it was simply query churn on the one screen that also drives a
+  /// player.
+  Stream<EntryRow?>? _entryStream;
+  Stream<List<MarkerRow>>? _markerStream;
+
+  /// The type lookup, memoised by the id it was made for. The type *can* change
+  /// (edit mode offers it), so a plain field would go stale.
+  int? _typeFutureFor;
+  Future<EntryTypeRow>? _typeFuture;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // First legal moment to reach AppScope. Both streams key off widget.entryId,
+    // which never changes for a given screen, so they are created once.
+    final db = AppScope.of(context).db;
+    _entryStream ??= db.watchEntry(widget.entryId);
+    _markerStream ??= db.watchMarkers(widget.entryId);
+  }
+
+  Future<EntryTypeRow> _typeFor(CairnDatabase db, int typeId) {
+    if (_typeFutureFor != typeId || _typeFuture == null) {
+      _typeFutureFor = typeId;
+      _typeFuture = db.typeById(typeId);
+    }
+    return _typeFuture!;
+  }
 
   @override
   void dispose() {
@@ -103,12 +138,19 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
     if (mounted) Navigator.of(context).pop();
   }
 
+  /// A marker kept through review but wrong on reflection. Deleting one is not
+  /// worth a confirmation -- it is a timestamp, and re-adding means re-recording
+  /// only in the sense that the original tap is gone.
+  Future<void> _removeMarker(MarkerRow marker) async {
+    await AppScope.of(context).db.deleteMarker(marker.id);
+  }
+
   @override
   Widget build(BuildContext context) {
     final scope = AppScope.of(context);
 
     return StreamBuilder<EntryRow?>(
-      stream: scope.db.watchEntry(widget.entryId),
+      stream: _entryStream,
       builder: (context, snapshot) {
         final entry = snapshot.data;
         if (entry == null) {
@@ -132,7 +174,7 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
     final text = Theme.of(context).textTheme;
 
     return FutureBuilder<EntryTypeRow>(
-      future: scope.db.typeById(entry.typeId),
+      future: _typeFor(scope.db, entry.typeId),
       builder: (context, typeSnapshot) {
         final type = typeSnapshot.data;
         final typeName = type?.name ?? '';
@@ -202,11 +244,44 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
                       'and tags are intact, but there is nothing to play.',
                 )
               else
-                MediaPreview(
-                  // Resolved from the stored relative path (§9).
-                  path: scope.store.resolve(entry.filePath),
-                  medium: entry.medium,
-                  durationMs: entry.durationMs,
+                // Watched rather than read once, so removing a marker in edit
+                // mode updates the ticks and the jump row immediately.
+                StreamBuilder<List<MarkerRow>>(
+                  stream: _markerStream,
+                  builder: (context, snapshot) {
+                    final markers = snapshot.data ?? const <MarkerRow>[];
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        MediaPreview(
+                          // Resolved from the stored relative path (§9).
+                          path: scope.store.resolve(entry.filePath),
+                          medium: entry.medium,
+                          durationMs: entry.durationMs,
+                          markerOffsetsMs:
+                              markers.map((m) => m.offsetMs).toList(),
+                          amplitudeEnvelope: entry.amplitudeEnvelope,
+                          // The detail screen is where an entry gets *replayed*,
+                          // so this is the one place the transport row belongs.
+                          transport: true,
+                        ),
+                        // Removal lives behind edit mode rather than on the
+                        // playback chips: those are for jumping, and a delete
+                        // affordance beside a seek target invites the wrong tap.
+                        if (_editing && markers.isNotEmpty) ...[
+                          const SizedBox(height: Space.lg),
+                          MarkerReview(
+                            offsetsMs:
+                                markers.map((m) => m.offsetMs).toList(),
+                            enabled: true,
+                            onRemove: (offset) => _removeMarker(
+                              markers.firstWhere((m) => m.offsetMs == offset),
+                            ),
+                          ),
+                        ],
+                      ],
+                    );
+                  },
                 ),
               const SizedBox(height: Space.xl),
 

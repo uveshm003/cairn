@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- S14 asks for externalized strings even while launching English-only. These
+     are the widget and tile labels; the app's own strings live in Dart. -->
+<resources>
+    <string name="widget_title">Cairn</string>
+    <string name="widget_audio">Audio</string>
+    <string name="widget_video">Video</string>
+    <string name="widget_audio_label">Record an audio entry</string>
+    <string name="widget_video_label">Record a video entry</string>
+    <string name="widget_description">One tap to a new audio or video entry.</string>
+    <string name="tile_label">Record</string>
+</resources>

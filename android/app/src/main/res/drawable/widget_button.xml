@@ -1,0 +1,7 @@
+<!-- The two tap targets. Translucent white over the surface, the same treatment
+     the capture screen's own chrome uses. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="#24FFFFFF" />
+    <corners android:radius="14dp" />
+</shape>

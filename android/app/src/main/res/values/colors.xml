@@ -1,4 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <color name="ic_launcher_background">#1A1815</color>
+
+    <!-- Mirrors lib/ui/theme/tokens.dart. A widget cannot read Dart tokens, so
+         these are the one place in the app where a colour is duplicated; keep
+         them in step with CairnPalette.dark by hand. -->
+    <color name="widget_surface">#1A1815</color>
+    <color name="widget_ink">#F2EDE4</color>
+    <color name="widget_accent">#C8873C</color>
 </resources>

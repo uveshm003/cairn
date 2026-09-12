@@ -779,6 +779,18 @@ class $EntriesTable extends Entries with TableInfo<$EntriesTable, EntryRow> {
     type: DriftSqlType.double,
     requiredDuringInsert: false,
   );
+  static const VerificationMeta _amplitudeEnvelopeMeta = const VerificationMeta(
+    'amplitudeEnvelope',
+  );
+  @override
+  late final GeneratedColumn<Uint8List> amplitudeEnvelope =
+      GeneratedColumn<Uint8List>(
+        'amplitude_envelope',
+        aliasedName,
+        true,
+        type: DriftSqlType.blob,
+        requiredDuringInsert: false,
+      );
   static const VerificationMeta _isFavoriteMeta = const VerificationMeta(
     'isFavorite',
   );
@@ -841,6 +853,7 @@ class $EntriesTable extends Entries with TableInfo<$EntriesTable, EntryRow> {
     bitrateKbps,
     latitude,
     longitude,
+    amplitudeEnvelope,
     isFavorite,
     isDeleted,
     deletedAt,
@@ -988,6 +1001,15 @@ class $EntriesTable extends Entries with TableInfo<$EntriesTable, EntryRow> {
         longitude.isAcceptableOrUnknown(data['longitude']!, _longitudeMeta),
       );
     }
+    if (data.containsKey('amplitude_envelope')) {
+      context.handle(
+        _amplitudeEnvelopeMeta,
+        amplitudeEnvelope.isAcceptableOrUnknown(
+          data['amplitude_envelope']!,
+          _amplitudeEnvelopeMeta,
+        ),
+      );
+    }
     if (data.containsKey('is_favorite')) {
       context.handle(
         _isFavoriteMeta,
@@ -1093,6 +1115,10 @@ class $EntriesTable extends Entries with TableInfo<$EntriesTable, EntryRow> {
         DriftSqlType.double,
         data['${effectivePrefix}longitude'],
       ),
+      amplitudeEnvelope: attachedDatabase.typeMapping.read(
+        DriftSqlType.blob,
+        data['${effectivePrefix}amplitude_envelope'],
+      ),
       isFavorite: attachedDatabase.typeMapping.read(
         DriftSqlType.bool,
         data['${effectivePrefix}is_favorite'],
@@ -1150,6 +1176,21 @@ class EntryRow extends DataClass implements Insertable<EntryRow> {
   /// Off by default (S5). Only populated when the user opts in.
   final double? latitude;
   final double? longitude;
+
+  /// Amplitude envelope for waveform scrubbing: one byte (0-255) per sample,
+  /// captured live from the recorder rather than decoded back out of the file.
+  ///
+  /// Nothing in the dependency tree can decode audio to amplitudes, and adding
+  /// something that could would mean FFmpeg (S8 rules it out). The recorder is
+  /// already reporting levels for the on-screen meter, so sampling them costs
+  /// nothing.
+  ///
+  /// Null for video, and for every audio entry recorded before this column
+  /// existed -- the player falls back to a plain slider, so null is a normal
+  /// state and not a defect. The sample interval is deliberately *not* stored:
+  /// it is derived as `durationMs / length`, so changing the capture cadence
+  /// cannot misalign old envelopes.
+  final Uint8List? amplitudeEnvelope;
   final bool isFavorite;
 
   /// Soft delete -> trash, purged after N days (S9).
@@ -1175,6 +1216,7 @@ class EntryRow extends DataClass implements Insertable<EntryRow> {
     this.bitrateKbps,
     this.latitude,
     this.longitude,
+    this.amplitudeEnvelope,
     required this.isFavorite,
     required this.isDeleted,
     this.deletedAt,
@@ -1225,6 +1267,9 @@ class EntryRow extends DataClass implements Insertable<EntryRow> {
     if (!nullToAbsent || longitude != null) {
       map['longitude'] = Variable<double>(longitude);
     }
+    if (!nullToAbsent || amplitudeEnvelope != null) {
+      map['amplitude_envelope'] = Variable<Uint8List>(amplitudeEnvelope);
+    }
     map['is_favorite'] = Variable<bool>(isFavorite);
     map['is_deleted'] = Variable<bool>(isDeleted);
     if (!nullToAbsent || deletedAt != null) {
@@ -1272,6 +1317,9 @@ class EntryRow extends DataClass implements Insertable<EntryRow> {
       longitude: longitude == null && nullToAbsent
           ? const Value.absent()
           : Value(longitude),
+      amplitudeEnvelope: amplitudeEnvelope == null && nullToAbsent
+          ? const Value.absent()
+          : Value(amplitudeEnvelope),
       isFavorite: Value(isFavorite),
       isDeleted: Value(isDeleted),
       deletedAt: deletedAt == null && nullToAbsent
@@ -1307,6 +1355,9 @@ class EntryRow extends DataClass implements Insertable<EntryRow> {
       bitrateKbps: serializer.fromJson<int?>(json['bitrateKbps']),
       latitude: serializer.fromJson<double?>(json['latitude']),
       longitude: serializer.fromJson<double?>(json['longitude']),
+      amplitudeEnvelope: serializer.fromJson<Uint8List?>(
+        json['amplitudeEnvelope'],
+      ),
       isFavorite: serializer.fromJson<bool>(json['isFavorite']),
       isDeleted: serializer.fromJson<bool>(json['isDeleted']),
       deletedAt: serializer.fromJson<DateTime?>(json['deletedAt']),
@@ -1337,6 +1388,7 @@ class EntryRow extends DataClass implements Insertable<EntryRow> {
       'bitrateKbps': serializer.toJson<int?>(bitrateKbps),
       'latitude': serializer.toJson<double?>(latitude),
       'longitude': serializer.toJson<double?>(longitude),
+      'amplitudeEnvelope': serializer.toJson<Uint8List?>(amplitudeEnvelope),
       'isFavorite': serializer.toJson<bool>(isFavorite),
       'isDeleted': serializer.toJson<bool>(isDeleted),
       'deletedAt': serializer.toJson<DateTime?>(deletedAt),
@@ -1363,6 +1415,7 @@ class EntryRow extends DataClass implements Insertable<EntryRow> {
     Value<int?> bitrateKbps = const Value.absent(),
     Value<double?> latitude = const Value.absent(),
     Value<double?> longitude = const Value.absent(),
+    Value<Uint8List?> amplitudeEnvelope = const Value.absent(),
     bool? isFavorite,
     bool? isDeleted,
     Value<DateTime?> deletedAt = const Value.absent(),
@@ -1390,6 +1443,9 @@ class EntryRow extends DataClass implements Insertable<EntryRow> {
     bitrateKbps: bitrateKbps.present ? bitrateKbps.value : this.bitrateKbps,
     latitude: latitude.present ? latitude.value : this.latitude,
     longitude: longitude.present ? longitude.value : this.longitude,
+    amplitudeEnvelope: amplitudeEnvelope.present
+        ? amplitudeEnvelope.value
+        : this.amplitudeEnvelope,
     isFavorite: isFavorite ?? this.isFavorite,
     isDeleted: isDeleted ?? this.isDeleted,
     deletedAt: deletedAt.present ? deletedAt.value : this.deletedAt,
@@ -1427,6 +1483,9 @@ class EntryRow extends DataClass implements Insertable<EntryRow> {
           : this.bitrateKbps,
       latitude: data.latitude.present ? data.latitude.value : this.latitude,
       longitude: data.longitude.present ? data.longitude.value : this.longitude,
+      amplitudeEnvelope: data.amplitudeEnvelope.present
+          ? data.amplitudeEnvelope.value
+          : this.amplitudeEnvelope,
       isFavorite: data.isFavorite.present
           ? data.isFavorite.value
           : this.isFavorite,
@@ -1457,6 +1516,7 @@ class EntryRow extends DataClass implements Insertable<EntryRow> {
           ..write('bitrateKbps: $bitrateKbps, ')
           ..write('latitude: $latitude, ')
           ..write('longitude: $longitude, ')
+          ..write('amplitudeEnvelope: $amplitudeEnvelope, ')
           ..write('isFavorite: $isFavorite, ')
           ..write('isDeleted: $isDeleted, ')
           ..write('deletedAt: $deletedAt')
@@ -1485,6 +1545,7 @@ class EntryRow extends DataClass implements Insertable<EntryRow> {
     bitrateKbps,
     latitude,
     longitude,
+    $driftBlobEquality.hash(amplitudeEnvelope),
     isFavorite,
     isDeleted,
     deletedAt,
@@ -1512,6 +1573,10 @@ class EntryRow extends DataClass implements Insertable<EntryRow> {
           other.bitrateKbps == this.bitrateKbps &&
           other.latitude == this.latitude &&
           other.longitude == this.longitude &&
+          $driftBlobEquality.equals(
+            other.amplitudeEnvelope,
+            this.amplitudeEnvelope,
+          ) &&
           other.isFavorite == this.isFavorite &&
           other.isDeleted == this.isDeleted &&
           other.deletedAt == this.deletedAt);
@@ -1537,6 +1602,7 @@ class EntriesCompanion extends UpdateCompanion<EntryRow> {
   final Value<int?> bitrateKbps;
   final Value<double?> latitude;
   final Value<double?> longitude;
+  final Value<Uint8List?> amplitudeEnvelope;
   final Value<bool> isFavorite;
   final Value<bool> isDeleted;
   final Value<DateTime?> deletedAt;
@@ -1560,6 +1626,7 @@ class EntriesCompanion extends UpdateCompanion<EntryRow> {
     this.bitrateKbps = const Value.absent(),
     this.latitude = const Value.absent(),
     this.longitude = const Value.absent(),
+    this.amplitudeEnvelope = const Value.absent(),
     this.isFavorite = const Value.absent(),
     this.isDeleted = const Value.absent(),
     this.deletedAt = const Value.absent(),
@@ -1584,6 +1651,7 @@ class EntriesCompanion extends UpdateCompanion<EntryRow> {
     this.bitrateKbps = const Value.absent(),
     this.latitude = const Value.absent(),
     this.longitude = const Value.absent(),
+    this.amplitudeEnvelope = const Value.absent(),
     this.isFavorite = const Value.absent(),
     this.isDeleted = const Value.absent(),
     this.deletedAt = const Value.absent(),
@@ -1615,6 +1683,7 @@ class EntriesCompanion extends UpdateCompanion<EntryRow> {
     Expression<int>? bitrateKbps,
     Expression<double>? latitude,
     Expression<double>? longitude,
+    Expression<Uint8List>? amplitudeEnvelope,
     Expression<bool>? isFavorite,
     Expression<bool>? isDeleted,
     Expression<DateTime>? deletedAt,
@@ -1639,6 +1708,7 @@ class EntriesCompanion extends UpdateCompanion<EntryRow> {
       if (bitrateKbps != null) 'bitrate_kbps': bitrateKbps,
       if (latitude != null) 'latitude': latitude,
       if (longitude != null) 'longitude': longitude,
+      if (amplitudeEnvelope != null) 'amplitude_envelope': amplitudeEnvelope,
       if (isFavorite != null) 'is_favorite': isFavorite,
       if (isDeleted != null) 'is_deleted': isDeleted,
       if (deletedAt != null) 'deleted_at': deletedAt,
@@ -1665,6 +1735,7 @@ class EntriesCompanion extends UpdateCompanion<EntryRow> {
     Value<int?>? bitrateKbps,
     Value<double?>? latitude,
     Value<double?>? longitude,
+    Value<Uint8List?>? amplitudeEnvelope,
     Value<bool>? isFavorite,
     Value<bool>? isDeleted,
     Value<DateTime?>? deletedAt,
@@ -1689,6 +1760,7 @@ class EntriesCompanion extends UpdateCompanion<EntryRow> {
       bitrateKbps: bitrateKbps ?? this.bitrateKbps,
       latitude: latitude ?? this.latitude,
       longitude: longitude ?? this.longitude,
+      amplitudeEnvelope: amplitudeEnvelope ?? this.amplitudeEnvelope,
       isFavorite: isFavorite ?? this.isFavorite,
       isDeleted: isDeleted ?? this.isDeleted,
       deletedAt: deletedAt ?? this.deletedAt,
@@ -1757,6 +1829,9 @@ class EntriesCompanion extends UpdateCompanion<EntryRow> {
     if (longitude.present) {
       map['longitude'] = Variable<double>(longitude.value);
     }
+    if (amplitudeEnvelope.present) {
+      map['amplitude_envelope'] = Variable<Uint8List>(amplitudeEnvelope.value);
+    }
     if (isFavorite.present) {
       map['is_favorite'] = Variable<bool>(isFavorite.value);
     }
@@ -1791,6 +1866,7 @@ class EntriesCompanion extends UpdateCompanion<EntryRow> {
           ..write('bitrateKbps: $bitrateKbps, ')
           ..write('latitude: $latitude, ')
           ..write('longitude: $longitude, ')
+          ..write('amplitudeEnvelope: $amplitudeEnvelope, ')
           ..write('isFavorite: $isFavorite, ')
           ..write('isDeleted: $isDeleted, ')
           ..write('deletedAt: $deletedAt')
@@ -2260,6 +2336,311 @@ class EntryTagsCompanion extends UpdateCompanion<EntryTagRow> {
   }
 }
 
+class $EntryMarkersTable extends EntryMarkers
+    with TableInfo<$EntryMarkersTable, MarkerRow> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $EntryMarkersTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _idMeta = const VerificationMeta('id');
+  @override
+  late final GeneratedColumn<int> id = GeneratedColumn<int>(
+    'id',
+    aliasedName,
+    false,
+    hasAutoIncrement: true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'PRIMARY KEY AUTOINCREMENT',
+    ),
+  );
+  static const VerificationMeta _entryIdMeta = const VerificationMeta(
+    'entryId',
+  );
+  @override
+  late final GeneratedColumn<int> entryId = GeneratedColumn<int>(
+    'entry_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: true,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'REFERENCES entries (id) ON DELETE CASCADE',
+    ),
+  );
+  static const VerificationMeta _offsetMsMeta = const VerificationMeta(
+    'offsetMs',
+  );
+  @override
+  late final GeneratedColumn<int> offsetMs = GeneratedColumn<int>(
+    'offset_ms',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _labelMeta = const VerificationMeta('label');
+  @override
+  late final GeneratedColumn<String> label = GeneratedColumn<String>(
+    'label',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  @override
+  List<GeneratedColumn> get $columns => [id, entryId, offsetMs, label];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'entry_markers';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<MarkerRow> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('id')) {
+      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    }
+    if (data.containsKey('entry_id')) {
+      context.handle(
+        _entryIdMeta,
+        entryId.isAcceptableOrUnknown(data['entry_id']!, _entryIdMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_entryIdMeta);
+    }
+    if (data.containsKey('offset_ms')) {
+      context.handle(
+        _offsetMsMeta,
+        offsetMs.isAcceptableOrUnknown(data['offset_ms']!, _offsetMsMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_offsetMsMeta);
+    }
+    if (data.containsKey('label')) {
+      context.handle(
+        _labelMeta,
+        label.isAcceptableOrUnknown(data['label']!, _labelMeta),
+      );
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {id};
+  @override
+  MarkerRow map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return MarkerRow(
+      id: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}id'],
+      )!,
+      entryId: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}entry_id'],
+      )!,
+      offsetMs: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}offset_ms'],
+      )!,
+      label: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}label'],
+      ),
+    );
+  }
+
+  @override
+  $EntryMarkersTable createAlias(String alias) {
+    return $EntryMarkersTable(attachedDatabase, alias);
+  }
+}
+
+class MarkerRow extends DataClass implements Insertable<MarkerRow> {
+  final int id;
+  final int entryId;
+  final int offsetMs;
+
+  /// Unused for now -- markers are deliberately one tap with no typing. The
+  /// column exists so naming one later is not a migration.
+  final String? label;
+  const MarkerRow({
+    required this.id,
+    required this.entryId,
+    required this.offsetMs,
+    this.label,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<int>(id);
+    map['entry_id'] = Variable<int>(entryId);
+    map['offset_ms'] = Variable<int>(offsetMs);
+    if (!nullToAbsent || label != null) {
+      map['label'] = Variable<String>(label);
+    }
+    return map;
+  }
+
+  EntryMarkersCompanion toCompanion(bool nullToAbsent) {
+    return EntryMarkersCompanion(
+      id: Value(id),
+      entryId: Value(entryId),
+      offsetMs: Value(offsetMs),
+      label: label == null && nullToAbsent
+          ? const Value.absent()
+          : Value(label),
+    );
+  }
+
+  factory MarkerRow.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return MarkerRow(
+      id: serializer.fromJson<int>(json['id']),
+      entryId: serializer.fromJson<int>(json['entryId']),
+      offsetMs: serializer.fromJson<int>(json['offsetMs']),
+      label: serializer.fromJson<String?>(json['label']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<int>(id),
+      'entryId': serializer.toJson<int>(entryId),
+      'offsetMs': serializer.toJson<int>(offsetMs),
+      'label': serializer.toJson<String?>(label),
+    };
+  }
+
+  MarkerRow copyWith({
+    int? id,
+    int? entryId,
+    int? offsetMs,
+    Value<String?> label = const Value.absent(),
+  }) => MarkerRow(
+    id: id ?? this.id,
+    entryId: entryId ?? this.entryId,
+    offsetMs: offsetMs ?? this.offsetMs,
+    label: label.present ? label.value : this.label,
+  );
+  MarkerRow copyWithCompanion(EntryMarkersCompanion data) {
+    return MarkerRow(
+      id: data.id.present ? data.id.value : this.id,
+      entryId: data.entryId.present ? data.entryId.value : this.entryId,
+      offsetMs: data.offsetMs.present ? data.offsetMs.value : this.offsetMs,
+      label: data.label.present ? data.label.value : this.label,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('MarkerRow(')
+          ..write('id: $id, ')
+          ..write('entryId: $entryId, ')
+          ..write('offsetMs: $offsetMs, ')
+          ..write('label: $label')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(id, entryId, offsetMs, label);
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is MarkerRow &&
+          other.id == this.id &&
+          other.entryId == this.entryId &&
+          other.offsetMs == this.offsetMs &&
+          other.label == this.label);
+}
+
+class EntryMarkersCompanion extends UpdateCompanion<MarkerRow> {
+  final Value<int> id;
+  final Value<int> entryId;
+  final Value<int> offsetMs;
+  final Value<String?> label;
+  const EntryMarkersCompanion({
+    this.id = const Value.absent(),
+    this.entryId = const Value.absent(),
+    this.offsetMs = const Value.absent(),
+    this.label = const Value.absent(),
+  });
+  EntryMarkersCompanion.insert({
+    this.id = const Value.absent(),
+    required int entryId,
+    required int offsetMs,
+    this.label = const Value.absent(),
+  }) : entryId = Value(entryId),
+       offsetMs = Value(offsetMs);
+  static Insertable<MarkerRow> custom({
+    Expression<int>? id,
+    Expression<int>? entryId,
+    Expression<int>? offsetMs,
+    Expression<String>? label,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (entryId != null) 'entry_id': entryId,
+      if (offsetMs != null) 'offset_ms': offsetMs,
+      if (label != null) 'label': label,
+    });
+  }
+
+  EntryMarkersCompanion copyWith({
+    Value<int>? id,
+    Value<int>? entryId,
+    Value<int>? offsetMs,
+    Value<String?>? label,
+  }) {
+    return EntryMarkersCompanion(
+      id: id ?? this.id,
+      entryId: entryId ?? this.entryId,
+      offsetMs: offsetMs ?? this.offsetMs,
+      label: label ?? this.label,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<int>(id.value);
+    }
+    if (entryId.present) {
+      map['entry_id'] = Variable<int>(entryId.value);
+    }
+    if (offsetMs.present) {
+      map['offset_ms'] = Variable<int>(offsetMs.value);
+    }
+    if (label.present) {
+      map['label'] = Variable<String>(label.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('EntryMarkersCompanion(')
+          ..write('id: $id, ')
+          ..write('entryId: $entryId, ')
+          ..write('offsetMs: $offsetMs, ')
+          ..write('label: $label')
+          ..write(')'))
+        .toString();
+  }
+}
+
 class $SettingsTable extends Settings
     with TableInfo<$SettingsTable, SettingRow> {
   @override
@@ -2475,6 +2856,7 @@ abstract class _$CairnDatabase extends GeneratedDatabase {
   late final $EntriesTable entries = $EntriesTable(this);
   late final $TagsTable tags = $TagsTable(this);
   late final $EntryTagsTable entryTags = $EntryTagsTable(this);
+  late final $EntryMarkersTable entryMarkers = $EntryMarkersTable(this);
   late final $SettingsTable settings = $SettingsTable(this);
   @override
   Iterable<TableInfo<Table, Object?>> get allTables =>
@@ -2485,6 +2867,7 @@ abstract class _$CairnDatabase extends GeneratedDatabase {
     entries,
     tags,
     entryTags,
+    entryMarkers,
     settings,
   ];
   @override
@@ -2502,6 +2885,13 @@ abstract class _$CairnDatabase extends GeneratedDatabase {
         limitUpdateKind: UpdateKind.delete,
       ),
       result: [TableUpdate('entry_tags', kind: UpdateKind.delete)],
+    ),
+    WritePropagation(
+      on: TableUpdateQuery.onTableName(
+        'entries',
+        limitUpdateKind: UpdateKind.delete,
+      ),
+      result: [TableUpdate('entry_markers', kind: UpdateKind.delete)],
     ),
   ]);
 }
@@ -2909,6 +3299,7 @@ typedef $$EntriesTableCreateCompanionBuilder =
       Value<int?> bitrateKbps,
       Value<double?> latitude,
       Value<double?> longitude,
+      Value<Uint8List?> amplitudeEnvelope,
       Value<bool> isFavorite,
       Value<bool> isDeleted,
       Value<DateTime?> deletedAt,
@@ -2934,6 +3325,7 @@ typedef $$EntriesTableUpdateCompanionBuilder =
       Value<int?> bitrateKbps,
       Value<double?> latitude,
       Value<double?> longitude,
+      Value<Uint8List?> amplitudeEnvelope,
       Value<bool> isFavorite,
       Value<bool> isDeleted,
       Value<DateTime?> deletedAt,
@@ -2973,6 +3365,24 @@ final class $$EntriesTableReferences
     ).filter((f) => f.entryId.id.sqlEquals($_itemColumn<int>('id')!));
 
     final cache = $_typedResult.readTableOrNull(_entryTagsRefsTable($_db));
+    return ProcessedTableManager(
+      manager.$state.copyWith(prefetchedData: cache),
+    );
+  }
+
+  static MultiTypedResultKey<$EntryMarkersTable, List<MarkerRow>>
+  _entryMarkersRefsTable(_$CairnDatabase db) => MultiTypedResultKey.fromTable(
+    db.entryMarkers,
+    aliasName: 'entries__id__entry_markers__entry_id',
+  );
+
+  $$EntryMarkersTableProcessedTableManager get entryMarkersRefs {
+    final manager = $$EntryMarkersTableTableManager(
+      $_db,
+      $_db.entryMarkers,
+    ).filter((f) => f.entryId.id.sqlEquals($_itemColumn<int>('id')!));
+
+    final cache = $_typedResult.readTableOrNull(_entryMarkersRefsTable($_db));
     return ProcessedTableManager(
       manager.$state.copyWith(prefetchedData: cache),
     );
@@ -3079,6 +3489,11 @@ class $$EntriesTableFilterComposer
     builder: (column) => ColumnFilters(column),
   );
 
+  ColumnFilters<Uint8List> get amplitudeEnvelope => $composableBuilder(
+    column: $table.amplitudeEnvelope,
+    builder: (column) => ColumnFilters(column),
+  );
+
   ColumnFilters<bool> get isFavorite => $composableBuilder(
     column: $table.isFavorite,
     builder: (column) => ColumnFilters(column),
@@ -3133,6 +3548,31 @@ class $$EntriesTableFilterComposer
           }) => $$EntryTagsTableFilterComposer(
             $db: $db,
             $table: $db.entryTags,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return f(composer);
+  }
+
+  Expression<bool> entryMarkersRefs(
+    Expression<bool> Function($$EntryMarkersTableFilterComposer f) f,
+  ) {
+    final $$EntryMarkersTableFilterComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.id,
+      referencedTable: $db.entryMarkers,
+      getReferencedColumn: (t) => t.entryId,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$EntryMarkersTableFilterComposer(
+            $db: $db,
+            $table: $db.entryMarkers,
             $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
             joinBuilder: joinBuilder,
             $removeJoinBuilderFromRootComposer:
@@ -3239,6 +3679,11 @@ class $$EntriesTableOrderingComposer
 
   ColumnOrderings<double> get longitude => $composableBuilder(
     column: $table.longitude,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<Uint8List> get amplitudeEnvelope => $composableBuilder(
+    column: $table.amplitudeEnvelope,
     builder: (column) => ColumnOrderings(column),
   );
 
@@ -3356,6 +3801,11 @@ class $$EntriesTableAnnotationComposer
   GeneratedColumn<double> get longitude =>
       $composableBuilder(column: $table.longitude, builder: (column) => column);
 
+  GeneratedColumn<Uint8List> get amplitudeEnvelope => $composableBuilder(
+    column: $table.amplitudeEnvelope,
+    builder: (column) => column,
+  );
+
   GeneratedColumn<bool> get isFavorite => $composableBuilder(
     column: $table.isFavorite,
     builder: (column) => column,
@@ -3414,6 +3864,31 @@ class $$EntriesTableAnnotationComposer
     );
     return f(composer);
   }
+
+  Expression<T> entryMarkersRefs<T extends Object>(
+    Expression<T> Function($$EntryMarkersTableAnnotationComposer a) f,
+  ) {
+    final $$EntryMarkersTableAnnotationComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.id,
+      referencedTable: $db.entryMarkers,
+      getReferencedColumn: (t) => t.entryId,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$EntryMarkersTableAnnotationComposer(
+            $db: $db,
+            $table: $db.entryMarkers,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return f(composer);
+  }
 }
 
 class $$EntriesTableTableManager
@@ -3429,7 +3904,11 @@ class $$EntriesTableTableManager
           $$EntriesTableUpdateCompanionBuilder,
           (EntryRow, $$EntriesTableReferences),
           EntryRow,
-          PrefetchHooks Function({bool typeId, bool entryTagsRefs})
+          PrefetchHooks Function({
+            bool typeId,
+            bool entryTagsRefs,
+            bool entryMarkersRefs,
+          })
         > {
   $$EntriesTableTableManager(_$CairnDatabase db, $EntriesTable table)
     : super(
@@ -3463,6 +3942,7 @@ class $$EntriesTableTableManager
                 Value<int?> bitrateKbps = const Value.absent(),
                 Value<double?> latitude = const Value.absent(),
                 Value<double?> longitude = const Value.absent(),
+                Value<Uint8List?> amplitudeEnvelope = const Value.absent(),
                 Value<bool> isFavorite = const Value.absent(),
                 Value<bool> isDeleted = const Value.absent(),
                 Value<DateTime?> deletedAt = const Value.absent(),
@@ -3486,6 +3966,7 @@ class $$EntriesTableTableManager
                 bitrateKbps: bitrateKbps,
                 latitude: latitude,
                 longitude: longitude,
+                amplitudeEnvelope: amplitudeEnvelope,
                 isFavorite: isFavorite,
                 isDeleted: isDeleted,
                 deletedAt: deletedAt,
@@ -3511,6 +3992,7 @@ class $$EntriesTableTableManager
                 Value<int?> bitrateKbps = const Value.absent(),
                 Value<double?> latitude = const Value.absent(),
                 Value<double?> longitude = const Value.absent(),
+                Value<Uint8List?> amplitudeEnvelope = const Value.absent(),
                 Value<bool> isFavorite = const Value.absent(),
                 Value<bool> isDeleted = const Value.absent(),
                 Value<DateTime?> deletedAt = const Value.absent(),
@@ -3534,6 +4016,7 @@ class $$EntriesTableTableManager
                 bitrateKbps: bitrateKbps,
                 latitude: latitude,
                 longitude: longitude,
+                amplitudeEnvelope: amplitudeEnvelope,
                 isFavorite: isFavorite,
                 isDeleted: isDeleted,
                 deletedAt: deletedAt,
@@ -3546,63 +4029,98 @@ class $$EntriesTableTableManager
                 ),
               )
               .toList(),
-          prefetchHooksCallback: ({typeId = false, entryTagsRefs = false}) {
-            return PrefetchHooks(
-              db: db,
-              explicitlyWatchedTables: [if (entryTagsRefs) db.entryTags],
-              addJoins:
-                  <
-                    T extends TableManagerState<
-                      dynamic,
-                      dynamic,
-                      dynamic,
-                      dynamic,
-                      dynamic,
-                      dynamic,
-                      dynamic,
-                      dynamic,
-                      dynamic,
-                      dynamic,
-                      dynamic
-                    >
-                  >(state) {
-                    if (typeId) {
-                      state =
-                          state.withJoin(
-                                currentTable: table,
-                                currentColumn: table.typeId,
-                                referencedTable: $$EntriesTableReferences
-                                    ._typeIdTable(db),
-                                referencedColumn: $$EntriesTableReferences
-                                    ._typeIdTable(db)
-                                    .id,
-                              )
-                              as T;
-                    }
+          prefetchHooksCallback:
+              ({
+                typeId = false,
+                entryTagsRefs = false,
+                entryMarkersRefs = false,
+              }) {
+                return PrefetchHooks(
+                  db: db,
+                  explicitlyWatchedTables: [
+                    if (entryTagsRefs) db.entryTags,
+                    if (entryMarkersRefs) db.entryMarkers,
+                  ],
+                  addJoins:
+                      <
+                        T extends TableManagerState<
+                          dynamic,
+                          dynamic,
+                          dynamic,
+                          dynamic,
+                          dynamic,
+                          dynamic,
+                          dynamic,
+                          dynamic,
+                          dynamic,
+                          dynamic,
+                          dynamic
+                        >
+                      >(state) {
+                        if (typeId) {
+                          state =
+                              state.withJoin(
+                                    currentTable: table,
+                                    currentColumn: table.typeId,
+                                    referencedTable: $$EntriesTableReferences
+                                        ._typeIdTable(db),
+                                    referencedColumn: $$EntriesTableReferences
+                                        ._typeIdTable(db)
+                                        .id,
+                                  )
+                                  as T;
+                        }
 
-                    return state;
+                        return state;
+                      },
+                  getPrefetchedDataCallback: (items) async {
+                    return [
+                      if (entryTagsRefs)
+                        await $_getPrefetchedData<
+                          EntryRow,
+                          $EntriesTable,
+                          EntryTagRow
+                        >(
+                          currentTable: table,
+                          referencedTable: $$EntriesTableReferences
+                              ._entryTagsRefsTable(db),
+                          managerFromTypedResult: (p0) =>
+                              $$EntriesTableReferences(
+                                db,
+                                table,
+                                p0,
+                              ).entryTagsRefs,
+                          referencedItemsForCurrentItem:
+                              (item, referencedItems) => referencedItems.where(
+                                (e) => e.entryId == item.id,
+                              ),
+                          typedResults: items,
+                        ),
+                      if (entryMarkersRefs)
+                        await $_getPrefetchedData<
+                          EntryRow,
+                          $EntriesTable,
+                          MarkerRow
+                        >(
+                          currentTable: table,
+                          referencedTable: $$EntriesTableReferences
+                              ._entryMarkersRefsTable(db),
+                          managerFromTypedResult: (p0) =>
+                              $$EntriesTableReferences(
+                                db,
+                                table,
+                                p0,
+                              ).entryMarkersRefs,
+                          referencedItemsForCurrentItem:
+                              (item, referencedItems) => referencedItems.where(
+                                (e) => e.entryId == item.id,
+                              ),
+                          typedResults: items,
+                        ),
+                    ];
                   },
-              getPrefetchedDataCallback: (items) async {
-                return [
-                  if (entryTagsRefs)
-                    await $_getPrefetchedData<
-                      EntryRow,
-                      $EntriesTable,
-                      EntryTagRow
-                    >(
-                      currentTable: table,
-                      referencedTable: $$EntriesTableReferences
-                          ._entryTagsRefsTable(db),
-                      managerFromTypedResult: (p0) =>
-                          $$EntriesTableReferences(db, table, p0).entryTagsRefs,
-                      referencedItemsForCurrentItem: (item, referencedItems) =>
-                          referencedItems.where((e) => e.entryId == item.id),
-                      typedResults: items,
-                    ),
-                ];
+                );
               },
-            );
-          },
         ),
       );
 }
@@ -3619,7 +4137,11 @@ typedef $$EntriesTableProcessedTableManager =
       $$EntriesTableUpdateCompanionBuilder,
       (EntryRow, $$EntriesTableReferences),
       EntryRow,
-      PrefetchHooks Function({bool typeId, bool entryTagsRefs})
+      PrefetchHooks Function({
+        bool typeId,
+        bool entryTagsRefs,
+        bool entryMarkersRefs,
+      })
     >;
 typedef $$TagsTableCreateCompanionBuilder =
     TagsCompanion Function({
@@ -4206,6 +4728,298 @@ typedef $$EntryTagsTableProcessedTableManager =
       EntryTagRow,
       PrefetchHooks Function({bool entryId, bool tagId})
     >;
+typedef $$EntryMarkersTableCreateCompanionBuilder =
+    EntryMarkersCompanion Function({
+      Value<int> id,
+      required int entryId,
+      required int offsetMs,
+      Value<String?> label,
+    });
+typedef $$EntryMarkersTableUpdateCompanionBuilder =
+    EntryMarkersCompanion Function({
+      Value<int> id,
+      Value<int> entryId,
+      Value<int> offsetMs,
+      Value<String?> label,
+    });
+
+final class $$EntryMarkersTableReferences
+    extends BaseReferences<_$CairnDatabase, $EntryMarkersTable, MarkerRow> {
+  $$EntryMarkersTableReferences(super.$_db, super.$_table, super.$_typedResult);
+
+  static $EntriesTable _entryIdTable(_$CairnDatabase db) =>
+      db.entries.createAlias('entry_markers__entry_id__entries__id');
+
+  $$EntriesTableProcessedTableManager get entryId {
+    final $_column = $_itemColumn<int>('entry_id')!;
+
+    final manager = $$EntriesTableTableManager(
+      $_db,
+      $_db.entries,
+    ).filter((f) => f.id.sqlEquals($_column));
+    final item = $_typedResult.readTableOrNull(_entryIdTable($_db));
+    if (item == null) return manager;
+    return ProcessedTableManager(
+      manager.$state.copyWith(prefetchedData: [item]),
+    );
+  }
+}
+
+class $$EntryMarkersTableFilterComposer
+    extends Composer<_$CairnDatabase, $EntryMarkersTable> {
+  $$EntryMarkersTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<int> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get offsetMs => $composableBuilder(
+    column: $table.offsetMs,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get label => $composableBuilder(
+    column: $table.label,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  $$EntriesTableFilterComposer get entryId {
+    final $$EntriesTableFilterComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.entryId,
+      referencedTable: $db.entries,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$EntriesTableFilterComposer(
+            $db: $db,
+            $table: $db.entries,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+}
+
+class $$EntryMarkersTableOrderingComposer
+    extends Composer<_$CairnDatabase, $EntryMarkersTable> {
+  $$EntryMarkersTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<int> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get offsetMs => $composableBuilder(
+    column: $table.offsetMs,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get label => $composableBuilder(
+    column: $table.label,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  $$EntriesTableOrderingComposer get entryId {
+    final $$EntriesTableOrderingComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.entryId,
+      referencedTable: $db.entries,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$EntriesTableOrderingComposer(
+            $db: $db,
+            $table: $db.entries,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+}
+
+class $$EntryMarkersTableAnnotationComposer
+    extends Composer<_$CairnDatabase, $EntryMarkersTable> {
+  $$EntryMarkersTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<int> get id =>
+      $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<int> get offsetMs =>
+      $composableBuilder(column: $table.offsetMs, builder: (column) => column);
+
+  GeneratedColumn<String> get label =>
+      $composableBuilder(column: $table.label, builder: (column) => column);
+
+  $$EntriesTableAnnotationComposer get entryId {
+    final $$EntriesTableAnnotationComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.entryId,
+      referencedTable: $db.entries,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$EntriesTableAnnotationComposer(
+            $db: $db,
+            $table: $db.entries,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+}
+
+class $$EntryMarkersTableTableManager
+    extends
+        RootTableManager<
+          _$CairnDatabase,
+          $EntryMarkersTable,
+          MarkerRow,
+          $$EntryMarkersTableFilterComposer,
+          $$EntryMarkersTableOrderingComposer,
+          $$EntryMarkersTableAnnotationComposer,
+          $$EntryMarkersTableCreateCompanionBuilder,
+          $$EntryMarkersTableUpdateCompanionBuilder,
+          (MarkerRow, $$EntryMarkersTableReferences),
+          MarkerRow,
+          PrefetchHooks Function({bool entryId})
+        > {
+  $$EntryMarkersTableTableManager(_$CairnDatabase db, $EntryMarkersTable table)
+    : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$EntryMarkersTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$EntryMarkersTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$EntryMarkersTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback:
+              ({
+                Value<int> id = const Value.absent(),
+                Value<int> entryId = const Value.absent(),
+                Value<int> offsetMs = const Value.absent(),
+                Value<String?> label = const Value.absent(),
+              }) => EntryMarkersCompanion(
+                id: id,
+                entryId: entryId,
+                offsetMs: offsetMs,
+                label: label,
+              ),
+          createCompanionCallback:
+              ({
+                Value<int> id = const Value.absent(),
+                required int entryId,
+                required int offsetMs,
+                Value<String?> label = const Value.absent(),
+              }) => EntryMarkersCompanion.insert(
+                id: id,
+                entryId: entryId,
+                offsetMs: offsetMs,
+                label: label,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map(
+                (e) => (
+                  e.readTable(table),
+                  $$EntryMarkersTableReferences(db, table, e),
+                ),
+              )
+              .toList(),
+          prefetchHooksCallback: ({entryId = false}) {
+            return PrefetchHooks(
+              db: db,
+              explicitlyWatchedTables: [],
+              addJoins:
+                  <
+                    T extends TableManagerState<
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic
+                    >
+                  >(state) {
+                    if (entryId) {
+                      state =
+                          state.withJoin(
+                                currentTable: table,
+                                currentColumn: table.entryId,
+                                referencedTable: $$EntryMarkersTableReferences
+                                    ._entryIdTable(db),
+                                referencedColumn: $$EntryMarkersTableReferences
+                                    ._entryIdTable(db)
+                                    .id,
+                              )
+                              as T;
+                    }
+
+                    return state;
+                  },
+              getPrefetchedDataCallback: (items) async {
+                return [];
+              },
+            );
+          },
+        ),
+      );
+}
+
+typedef $$EntryMarkersTableProcessedTableManager =
+    ProcessedTableManager<
+      _$CairnDatabase,
+      $EntryMarkersTable,
+      MarkerRow,
+      $$EntryMarkersTableFilterComposer,
+      $$EntryMarkersTableOrderingComposer,
+      $$EntryMarkersTableAnnotationComposer,
+      $$EntryMarkersTableCreateCompanionBuilder,
+      $$EntryMarkersTableUpdateCompanionBuilder,
+      (MarkerRow, $$EntryMarkersTableReferences),
+      MarkerRow,
+      PrefetchHooks Function({bool entryId})
+    >;
 typedef $$SettingsTableCreateCompanionBuilder =
     SettingsCompanion Function({
       required String key,
@@ -4353,6 +5167,8 @@ class $CairnDatabaseManager {
   $$TagsTableTableManager get tags => $$TagsTableTableManager(_db, _db.tags);
   $$EntryTagsTableTableManager get entryTags =>
       $$EntryTagsTableTableManager(_db, _db.entryTags);
+  $$EntryMarkersTableTableManager get entryMarkers =>
+      $$EntryMarkersTableTableManager(_db, _db.entryMarkers);
   $$SettingsTableTableManager get settings =>
       $$SettingsTableTableManager(_db, _db.settings);
 }

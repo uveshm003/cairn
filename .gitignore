@@ -43,3 +43,7 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Local dart-define values. Nothing reads this at runtime (there is no
+# dotenv dependency); the seed flag is passed with --dart-define.
+.env

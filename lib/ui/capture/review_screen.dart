@@ -7,6 +7,7 @@
 library;
 
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:drift/drift.dart' show Value;
 import 'package:flutter/material.dart';
@@ -15,9 +16,11 @@ import 'package:flutter_compress/flutter_compress.dart' show CancellationToken;
 import '../../app.dart';
 import '../../data/database.dart';
 import '../../domain/encoding_profile.dart';
+import '../../domain/recording_markers.dart';
 import '../../media/save_pipeline.dart';
 import '../../services/location_service.dart';
 import '../widgets/formatting.dart';
+import '../widgets/marker_review.dart';
 import '../widgets/media_preview.dart';
 import '../widgets/tag_editor.dart';
 import 'capture_flow.dart';
@@ -29,12 +32,23 @@ class ReviewScreen extends StatefulWidget {
     required this.medium,
     required this.type,
     required this.durationMs,
+    this.markerOffsetsMs = const [],
+    this.amplitudeEnvelope,
   });
 
   final String sourcePath;
   final Medium medium;
   final EntryTypeRow type;
   final int durationMs;
+
+  /// Raw stopwatch offsets from capture, still unclamped. They are normalized
+  /// against the *stored* file's duration at save time, not here -- that
+  /// duration is not known until the encode finishes.
+  final List<int> markerOffsetsMs;
+
+  /// Collected during capture; null for video and for audio recorded before
+  /// the envelope existed.
+  final Uint8List? amplitudeEnvelope;
 
   @override
   State<ReviewScreen> createState() => _ReviewScreenState();
@@ -43,6 +57,10 @@ class ReviewScreen extends StatefulWidget {
 class _ReviewScreenState extends State<ReviewScreen> {
   final _titleController = TextEditingController();
   final _noteController = TextEditingController();
+
+  /// A working copy, so removing a stray marker here does not require going
+  /// back and re-recording. Only committed on save.
+  late final List<int> _markerOffsets = List.of(widget.markerOffsetsMs);
 
   late EntryTypeRow _type = widget.type;
   List<String> _tagNames = [];
@@ -138,8 +156,16 @@ class _ReviewScreenState extends State<ReviewScreen> {
           bitrateKbps: Value(media.bitrateKbps),
           latitude: Value(coordinates?.latitude),
           longitude: Value(coordinates?.longitude),
+          amplitudeEnvelope: Value(widget.amplitudeEnvelope),
         ),
         tagIds: tagIds,
+        // Clamped against the *encoded* duration, not the stopwatch: the two
+        // can differ (which is why the pipeline measures the output at all),
+        // and a marker past the end of the file seeks nowhere.
+        markerOffsetsMs: normalizeMarkers(
+          _markerOffsets,
+          durationMs: media.durationMs,
+        ),
       );
 
       await scope.settings.noteEntryAdded();
@@ -229,6 +255,18 @@ class _ReviewScreenState extends State<ReviewScreen> {
               medium: widget.medium,
               durationMs: widget.durationMs,
             ),
+            // Only present when the user actually dropped markers, so the
+            // screen does not grow a section explaining a feature they did not
+            // use during this take.
+            if (_markerOffsets.isNotEmpty) ...[
+              const SizedBox(height: 16),
+              MarkerReview(
+                offsetsMs: _markerOffsets,
+                enabled: !_saving,
+                onRemove: (offset) =>
+                    setState(() => _markerOffsets.remove(offset)),
+              ),
+            ],
             const SizedBox(height: 20),
             TextField(
               controller: _titleController,

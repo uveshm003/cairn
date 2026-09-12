@@ -14,6 +14,7 @@ import 'data/database.dart';
 import 'media/media_store.dart';
 import 'media/save_pipeline.dart';
 import 'settings/app_settings.dart';
+import 'ui/capture/quick_capture_gate.dart';
 import 'ui/library/library_screen.dart';
 import 'ui/onboarding/onboarding_screen.dart';
 import 'ui/theme/cairn_theme.dart';
@@ -77,9 +78,15 @@ class CairnApp extends StatelessWidget {
           theme: buildCairnTheme(CairnPalette.light),
           darkTheme: buildCairnTheme(CairnPalette.dark),
           themeMode: mode,
-          home: showOnboarding
-              ? const OnboardingScreen()
-              : const LibraryScreen(),
+          // Onboarding must not be jumped over by a widget tap (S10). The gate
+          // reads `settings.onboarded` itself rather than being told here,
+          // because `showOnboarding` is fixed for the life of the process while
+          // the setting it came from is not.
+          home: QuickCaptureGate(
+            child: showOnboarding
+                ? const OnboardingScreen()
+                : const LibraryScreen(),
+          ),
         ),
       ),
     );

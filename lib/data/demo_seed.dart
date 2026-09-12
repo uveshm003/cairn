@@ -21,7 +21,7 @@ import '../media/media_store.dart';
 import 'database.dart';
 
 /// Set at build time. Const, so a release build tree-shakes the whole path away.
-const seedDemoRequested = bool.fromEnvironment('CAIRN_SEED_DEMO');
+const seedDemoRequested = true; //bool.fromEnvironment('CAIRN_SEED_DEMO');
 
 /// One seeded entry. Sizes are realistic for their profile so the storage screen
 /// and the space-saved stat show plausible figures.
@@ -38,10 +38,7 @@ typedef _Seed = ({
   int originalBytes,
 });
 
-Future<void> seedDemoDataIfRequested(
-  CairnDatabase db,
-  MediaStore store,
-) async {
+Future<void> seedDemoDataIfRequested(CairnDatabase db, MediaStore store) async {
   if (!seedDemoRequested || !kDebugMode) return;
 
   // Never touch an existing library.
@@ -57,9 +54,7 @@ Future<void> seedDemoDataIfRequested(
   if (pushed.existsSync()) {
     for (final file in pushed.listSync().whereType<File>()) {
       try {
-        final dest = File(
-          '${store.resolve(MediaStore.thumbDirName)}/${file.uri.pathSegments.last}',
-        );
+        final dest = File('${store.resolve(MediaStore.thumbDirName)}/${file.uri.pathSegments.last}');
         await dest.writeAsBytes(await file.readAsBytes());
         frames.add(store.relativize(dest.path));
       } catch (_) {
@@ -83,7 +78,8 @@ Future<void> seedDemoDataIfRequested(
     ),
     (
       title: 'Travis picking, slow',
-      note: 'Thumb stays on the bass strings the whole way. Still rushing the '
+      note:
+          'Thumb stays on the bass strings the whole way. Still rushing the '
           'turnaround.',
       type: 'Practice',
       medium: Medium.video,
@@ -188,8 +184,7 @@ Future<void> seedDemoDataIfRequested(
 
     // A real (if tiny) file, so playback attempts and the orphan sweep behave
     // the way they would for genuine entries.
-    final mediaPath =
-        store.newMediaPath(seed.medium == Medium.audio ? 'm4a' : 'mp4');
+    final mediaPath = store.newMediaPath(seed.medium == Medium.audio ? 'm4a' : 'mp4');
     await File(mediaPath).writeAsBytes(List.filled(2048, 0));
 
     String? thumb;

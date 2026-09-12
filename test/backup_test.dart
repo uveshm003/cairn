@@ -53,6 +53,8 @@ void main() {
     bool withThumbnail = false,
     Medium medium = Medium.video,
     DateTime? recordedAt,
+    List<int> markerOffsetsMs = const [],
+    Uint8List? envelope,
   }) async {
     final mediaPath = store.newMediaPath('mp4');
     File(mediaPath).writeAsBytesSync(List.filled(bytes, 3));
@@ -87,8 +89,10 @@ void main() {
         createdAt: at,
         updatedAt: at,
         recordedAt: at,
+        amplitudeEnvelope: Value(envelope),
       ),
       tagIds: tagIds,
+      markerOffsetsMs: markerOffsetsMs,
     );
   }
 
@@ -315,6 +319,150 @@ void main() {
     });
   });
 
+  group('markers and waveform envelopes', () {
+    test('markers round-trip through an archive', () async {
+      // Principle #3: offline means the user is the only backup, so anything
+      // the app stores has to survive export/import -- markers included.
+      await seedEntry(sourceDb, sourceStore,
+          title: 'practice',
+          type: 'Practice',
+          markerOffsetsMs: [1000, 12000, 30000]);
+
+      final exported = await BackupService(sourceDb, sourceStore)
+          .exportArchive(outputDirectory: archiveDir);
+      final fresh = freshInstall();
+      addTearDown(fresh.db.close);
+      await BackupService(fresh.db, fresh.store)
+          .importArchive(exported.archivePath);
+
+      final items = await fresh.db.watchLibrary(EntryFilter.empty).first;
+      final restored = items.single.entry;
+      final markers = await fresh.db.markersFor(restored.id);
+      expect(markers.map((m) => m.offsetMs), [1000, 12000, 30000]);
+    });
+
+    test('markers follow their entry, not the old row id', () async {
+      // The importing database assigns fresh ids, so a marker attached by the
+      // *old* id would silently land on the wrong entry.
+      await seedEntry(sourceDb, sourceStore,
+          title: 'first', markerOffsetsMs: [5000]);
+      await seedEntry(sourceDb, sourceStore,
+          title: 'second', markerOffsetsMs: [9000, 20000]);
+
+      final exported = await BackupService(sourceDb, sourceStore)
+          .exportArchive(outputDirectory: archiveDir);
+      final fresh = freshInstall();
+      addTearDown(fresh.db.close);
+      await BackupService(fresh.db, fresh.store)
+          .importArchive(exported.archivePath);
+
+      final items = await fresh.db.watchLibrary(EntryFilter.empty).first;
+      final first = items.firstWhere((i) => i.entry.title == 'first').entry;
+      final second = items.firstWhere((i) => i.entry.title == 'second').entry;
+
+      expect((await fresh.db.markersFor(first.id)).map((m) => m.offsetMs),
+          [5000]);
+      expect((await fresh.db.markersFor(second.id)).map((m) => m.offsetMs),
+          [9000, 20000]);
+    });
+
+    test('an envelope round-trips byte for byte', () async {
+      final envelope = Uint8List.fromList([0, 7, 128, 255, 3]);
+      await seedEntry(sourceDb, sourceStore,
+          title: 'audio', medium: Medium.audio, envelope: envelope);
+
+      final exported = await BackupService(sourceDb, sourceStore)
+          .exportArchive(outputDirectory: archiveDir);
+      final fresh = freshInstall();
+      addTearDown(fresh.db.close);
+      await BackupService(fresh.db, fresh.store)
+          .importArchive(exported.archivePath);
+
+      final items = await fresh.db.watchLibrary(EntryFilter.empty).first;
+      expect(items.single.entry.amplitudeEnvelope, envelope);
+    });
+
+    test('an entry with no envelope stays without one', () async {
+      await seedEntry(sourceDb, sourceStore, title: 'video');
+
+      final exported = await BackupService(sourceDb, sourceStore)
+          .exportArchive(outputDirectory: archiveDir);
+      final fresh = freshInstall();
+      addTearDown(fresh.db.close);
+      await BackupService(fresh.db, fresh.store)
+          .importArchive(exported.archivePath);
+
+      final items = await fresh.db.watchLibrary(EntryFilter.empty).first;
+      // Null, not an empty blob: the player treats those differently.
+      expect(items.single.entry.amplitudeEnvelope, isNull);
+    });
+
+    test('a v1 archive still restores, without markers or envelopes', () async {
+      // The whole point of versioning the manifest. A v1 archive has no
+      // `markers` key and no `amplitudeEnvelope` field; restoring must produce
+      // an entry with neither rather than throwing.
+      await seedEntry(sourceDb, sourceStore, title: 'old', tags: ['guitar']);
+      final exported = await BackupService(sourceDb, sourceStore)
+          .exportArchive(outputDirectory: archiveDir);
+
+      final downgraded = await _rewriteManifest(
+        exported.archivePath,
+        archiveDir,
+        (manifest) {
+          manifest['manifestVersion'] = 1;
+          manifest.remove('markers');
+          for (final entry in (manifest['entries'] as List)) {
+            (entry as Map<String, dynamic>).remove('amplitudeEnvelope');
+          }
+          return manifest;
+        },
+      );
+
+      final fresh = freshInstall();
+      addTearDown(fresh.db.close);
+      final result =
+          await BackupService(fresh.db, fresh.store).importArchive(downgraded);
+
+      expect(result.imported, 1);
+      final items = await fresh.db.watchLibrary(EntryFilter.empty).first;
+      expect(items.single.entry.title, 'old');
+      expect(items.single.tagNames, ['guitar']);
+      expect(items.single.entry.amplitudeEnvelope, isNull);
+      expect(await fresh.db.markersFor(items.single.entry.id), isEmpty);
+    });
+
+    test('a corrupt envelope degrades instead of failing the import', () async {
+      await seedEntry(sourceDb, sourceStore,
+          title: 'audio',
+          medium: Medium.audio,
+          envelope: Uint8List.fromList([1, 2, 3]));
+      final exported = await BackupService(sourceDb, sourceStore)
+          .exportArchive(outputDirectory: archiveDir);
+
+      final corrupted = await _rewriteManifest(
+        exported.archivePath,
+        archiveDir,
+        (manifest) {
+          for (final entry in (manifest['entries'] as List)) {
+            (entry as Map<String, dynamic>)['amplitudeEnvelope'] =
+                'not base64 !!';
+          }
+          return manifest;
+        },
+      );
+
+      final fresh = freshInstall();
+      addTearDown(fresh.db.close);
+      final result =
+          await BackupService(fresh.db, fresh.store).importArchive(corrupted);
+
+      // The waveform is a convenience; losing it must not cost the recording.
+      expect(result.imported, 1);
+      final items = await fresh.db.watchLibrary(EntryFilter.empty).first;
+      expect(items.single.entry.amplitudeEnvelope, isNull);
+    });
+  });
+
   group('rejects bad input', () {
     test('a file that is not a zip', () async {
       final junk = File(p.join(archiveDir.path, 'not-a-zip.zip'))
@@ -414,4 +562,35 @@ void main() {
       expect(await fresh.db.watchLibrary(EntryFilter.empty).first, isEmpty);
     });
   });
+}
+
+/// Rewrites an archive's manifest, leaving its media files alone.
+///
+/// Used to forge an older or corrupt archive from a real one, which is the only
+/// honest way to test backward compatibility: hand-writing a "v1 archive" would
+/// test a fiction, while this starts from something the app genuinely produced.
+Future<String> _rewriteManifest(
+  String archivePath,
+  Directory outputDir,
+  Map<String, dynamic> Function(Map<String, dynamic>) edit,
+) async {
+  final original = ZipDecoder().decodeBytes(File(archivePath).readAsBytesSync());
+
+  final out = Archive();
+  for (final file in original.files) {
+    if (!file.isFile) continue;
+    if (file.name == 'manifest.json') {
+      final manifest =
+          jsonDecode(utf8.decode(file.readBytes()!)) as Map<String, dynamic>;
+      final bytes = utf8.encode(jsonEncode(edit(manifest)));
+      out.addFile(ArchiveFile.bytes('manifest.json', bytes));
+    } else {
+      final bytes = file.readBytes()!;
+      out.addFile(ArchiveFile.bytes(file.name, bytes));
+    }
+  }
+
+  final path = p.join(outputDir.path, 'rewritten.zip');
+  File(path).writeAsBytesSync(ZipEncoder().encode(out));
+  return path;
 }

@@ -76,6 +76,21 @@ class Entries extends Table {
   RealColumn get latitude => real().nullable()();
   RealColumn get longitude => real().nullable()();
 
+  /// Amplitude envelope for waveform scrubbing: one byte (0-255) per sample,
+  /// captured live from the recorder rather than decoded back out of the file.
+  ///
+  /// Nothing in the dependency tree can decode audio to amplitudes, and adding
+  /// something that could would mean FFmpeg (S8 rules it out). The recorder is
+  /// already reporting levels for the on-screen meter, so sampling them costs
+  /// nothing.
+  ///
+  /// Null for video, and for every audio entry recorded before this column
+  /// existed -- the player falls back to a plain slider, so null is a normal
+  /// state and not a defect. The sample interval is deliberately *not* stored:
+  /// it is derived as `durationMs / length`, so changing the capture cadence
+  /// cannot misalign old envelopes.
+  BlobColumn get amplitudeEnvelope => blob().nullable()();
+
   BoolColumn get isFavorite => boolean().withDefault(const Constant(false))();
 
   /// Soft delete -> trash, purged after N days (S9).
@@ -101,6 +116,25 @@ class EntryTags extends Table {
   Set<Column> get primaryKey => {entryId, tagId};
 }
 
+/// Markers dropped *during* recording (one tap, no typing), so a long Practice
+/// or How-to entry can be scanned instead of replayed.
+///
+/// Offsets are relative to the **stored** file, not the stopwatch: the
+/// compressed output's duration can diverge from the source (which is exactly
+/// why `SavePipeline` measures it), so a raw stopwatch offset can land past the
+/// end of the file it points into. Clamping happens at save time.
+@DataClassName('MarkerRow')
+class EntryMarkers extends Table {
+  IntColumn get id => integer().autoIncrement()();
+  IntColumn get entryId =>
+      integer().references(Entries, #id, onDelete: KeyAction.cascade)();
+  IntColumn get offsetMs => integer()();
+
+  /// Unused for now -- markers are deliberately one tap with no typing. The
+  /// column exists so naming one later is not a migration.
+  TextColumn get label => text().nullable()();
+}
+
 /// Single key-value table for AppSettings (S7).
 @DataClassName('SettingRow')
 class Settings extends Table {
@@ -111,14 +145,15 @@ class Settings extends Table {
   Set<Column> get primaryKey => {key};
 }
 
-@DriftDatabase(tables: [EntryTypes, Entries, Tags, EntryTags, Settings])
+@DriftDatabase(
+    tables: [EntryTypes, Entries, Tags, EntryTags, EntryMarkers, Settings])
 class CairnDatabase extends _$CairnDatabase {
   CairnDatabase() : super(driftDatabase(name: 'cairn'));
 
   CairnDatabase.forTesting(super.executor);
 
   @override
-  int get schemaVersion => 1;
+  int get schemaVersion => 2;
 
   /// ASCII unit separator, used to join tag names in the library query. Spelled
   /// as a char code rather than a literal byte, because an invisible control
@@ -163,12 +198,35 @@ class CairnDatabase extends _$CairnDatabase {
           ''');
 
           await _seedSystemTypes();
+
+          // v1 databases reach the same shape through onUpgrade; keeping the
+          // marker index in one helper means the two paths cannot diverge.
+          await _createMarkerIndex();
+        },
+        onUpgrade: (m, from, to) async {
+          // The app's first migration. Deliberately additive and step-wise:
+          // `createAll` would be wrong here -- it would collide with the FTS5
+          // virtual table and the expression index, neither of which Drift
+          // tracks as a table.
+          if (from < 2) {
+            await m.createTable(entryMarkers);
+            await _createMarkerIndex();
+            // Existing rows get NULL, which the player reads as "no waveform,
+            // use the slider" rather than as an empty waveform.
+            await m.addColumn(entries, entries.amplitudeEnvelope);
+          }
         },
         beforeOpen: (details) async {
           // Cascade deletes on entry_tags depend on this, and SQLite defaults
           // it off per-connection, so it has to be set on every open.
           await customStatement('PRAGMA foreign_keys = ON');
         },
+      );
+
+  /// Markers are always read by entry, never scanned globally.
+  Future<void> _createMarkerIndex() => customStatement(
+        'CREATE INDEX IF NOT EXISTS entry_markers_entry '
+        'ON entry_markers (entry_id)',
       );
 
   /// The fixed five (S6). Durations are *defaults*; settings can raise them
@@ -342,6 +400,7 @@ class CairnDatabase extends _$CairnDatabase {
   Future<int> createEntry(
     EntriesCompanion entry, {
     List<int> tagIds = const [],
+    List<int> markerOffsetsMs = const [],
   }) async {
     final id = await transaction(() async {
       final newId = await into(entries).insert(entry);
@@ -349,11 +408,50 @@ class CairnDatabase extends _$CairnDatabase {
         await into(entryTags)
             .insert(EntryTagsCompanion.insert(entryId: newId, tagId: tagId));
       }
+      for (final offset in markerOffsetsMs) {
+        await into(entryMarkers).insert(
+          EntryMarkersCompanion.insert(entryId: newId, offsetMs: offset),
+        );
+      }
       return newId;
     });
     await reindexEntry(id);
     return id;
   }
+
+  // --------------------------------------------------------------- markers
+
+  Future<List<MarkerRow>> markersFor(int entryId) => (select(entryMarkers)
+        ..where((m) => m.entryId.equals(entryId))
+        ..orderBy([(m) => OrderingTerm(expression: m.offsetMs)]))
+      .get();
+
+  Stream<List<MarkerRow>> watchMarkers(int entryId) => (select(entryMarkers)
+        ..where((m) => m.entryId.equals(entryId))
+        ..orderBy([(m) => OrderingTerm(expression: m.offsetMs)]))
+      .watch();
+
+  Future<void> deleteMarker(int id) =>
+      (delete(entryMarkers)..where((m) => m.id.equals(id))).go();
+
+  /// Sets an existing entry's markers to exactly [offsetsMs].
+  ///
+  /// Not on the restore path -- that goes through [createEntry], which writes
+  /// markers with the row in one transaction. This is the set-replace primitive
+  /// the migration test drives the v1 -> v2 table with, and the seam a future
+  /// bulk edit would use.
+  Future<void> replaceMarkers(int entryId, List<int> offsetsMs) async {
+    await transaction(() async {
+      await (delete(entryMarkers)..where((m) => m.entryId.equals(entryId)))
+          .go();
+      for (final offset in offsetsMs) {
+        await into(entryMarkers).insert(
+          EntryMarkersCompanion.insert(entryId: entryId, offsetMs: offset),
+        );
+      }
+    });
+  }
+
 
   Future<void> updateEntryFields(int id, EntriesCompanion changes) async {
     await (update(entries)..where((e) => e.id.equals(id))).write(
