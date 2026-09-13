@@ -6,6 +6,15 @@ device lean (real compression), and never hand any of it to a cloud.
 
 **No network requests at all.** No account, no sync, no analytics, no paywall.
 
+[![CI](https://github.com/uveshm003/cairn/actions/workflows/ci.yml/badge.svg)](https://github.com/uveshm003/cairn/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Flutter](https://img.shields.io/badge/flutter-3.44-blue.svg)](https://flutter.dev)
+[![Platform](https://img.shields.io/badge/platform-Android%20%7C%20iOS-lightgrey.svg)](#platform-notes)
+
+Free and open source under the [MIT license](LICENSE). Contributions welcome —
+start with [CONTRIBUTING.md](CONTRIBUTING.md), and note the one hard rule there:
+**nothing in this app may touch the network.**
+
 ## Status
 
 The v1 MVP from `requirements.md` §4 is built and running, and the capture
@@ -551,3 +560,36 @@ Two notes on what is left:
   is packaging, not architecture — the APK is already 66.3 MB, and a bundled
   whisper-tiny roughly doubles that, which is a real install-conversion cost for
   a feature that also happens to be the headline one.
+
+## Contributing
+
+Issues and pull requests are welcome. Two things to read first:
+
+- **[CONTRIBUTING.md](CONTRIBUTING.md)** — setup, the test commands CI runs, the
+  house style (screens never invent a colour, a gap, or a radius), and the one
+  rule: Cairn makes no network requests, ever. A change that adds one — directly
+  or through a dependency that phones home — cannot be accepted, however good the
+  feature.
+- **[The *What is unverified* section above](#what-is-unverified)** — the honest
+  list of what has never been exercised on hardware. Closing one of those gaps is
+  the single most useful contribution available, and it is mostly a matter of
+  owning a device and running the thing.
+
+`flutter analyze` and `flutter test` run in CI on every push and PR, along with
+a release build for both platforms and a check that the committed Drift codegen
+matches the schema. The integration tests are **not** in CI — `real_capture_test.dart`
+makes actual recordings and needs a real camera and microphone. Run those on a
+device before merging anything that touches capture, compression, or playback.
+
+Security issues go through [SECURITY.md](SECURITY.md), privately, never a public
+issue.
+
+## License
+
+[MIT](LICENSE) © 2026 Uvesh Menpur.
+
+The bundled fonts are the exception: Inter and Fraunces ship inside the app under
+the [SIL Open Font License 1.1](assets/fonts/OFL.txt), and that license travels
+with any redistribution. [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) has the
+full attribution, along with a note on the dependency licenses and on the Cairn
+name and mark.
